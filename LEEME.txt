@@ -1,0 +1,115 @@
+CATALOGADOR FOTOGRÁFICO DE POZOS (Windows)
+===========================================
+
+QUÉ HACE
+--------
+Permite revisar fotografías descargadas, escribir manualmente el pozo y el
+nivel, guardar una copia con nombre normalizado y añadir una fila al Excel de
+entrega. Los archivos originales no se renombran, no se mueven y no se editan.
+El zoom y la rotación existen solamente en pantalla.
+
+INSTALACIÓN EN WINDOWS
+----------------------
+Si recibiste Catalogador_Pozos_Setup_2.0.0.exe, ábrelo y sigue el asistente.
+El instalador ya contiene Python y todas las bibliotecas: no necesitas ejecutar
+INSTALAR.bat ni realizar los pasos siguientes.
+
+Para ejecutar la versión de código fuente:
+
+1. Instala Python 3 desde https://www.python.org/downloads/windows/
+   Durante la instalación, activa la opción para agregar Python al PATH.
+2. Extrae todo el contenido de este paquete en una carpeta normal. No ejecutes
+   el programa directamente desde el ZIP.
+3. Haz doble clic en INSTALAR.bat. Se necesita conexión a Internet para instalar:
+   Pillow, openpyxl y pillow-heif (soporte HEIC/HEIF).
+4. Después, abre el programa con ABRIR.bat.
+
+Las instrucciones para Linux, macOS, publicación en GitHub y construcción de un
+nuevo instalador se encuentran en README.md.
+
+FLUJO DE TRABAJO
+----------------
+1. Descarga y descomprime las fotografías. Los archivos JSON de Google Takeout
+   se ignoran; el programa no procesa videos.
+2. Elige la carpeta con las fotografías y una carpeta distinta para la salida.
+3. Revisa el código del sitio. "H-96-AM" es solo el valor inicial.
+4. Pulsa "Cargar / reanudar". La configuración se plegará para dejar más espacio.
+5. Selecciona una foto en la franja inferior, escribe Pozo y Nivel y revisa el
+   nombre previsto. Vista/detalle y Observaciones son opcionales.
+6. Pulsa "Guardar y siguiente". La aplicación crea la copia, actualiza el Excel
+   y solo entonces marca la fotografía como registrada.
+7. Si aún no puedes identificarla, pulsa "Omitir por ahora". No cuenta como
+   registrada ni como trabajo terminado. Selecciona su miniatura y pulsa
+   "Recuperar a pendientes" para volver a trabajar con ella.
+
+La opción "Mantener pozo y nivel para la siguiente foto" conserva únicamente
+esos dos campos después de guardar. Vista/detalle y Observaciones siempre se
+limpian. El consecutivo se vuelve a calcular y se muestra antes del siguiente
+guardado.
+
+ZOOM, DESPLAZAMIENTO Y ROTACIÓN
+-------------------------------
+- Rueda del ratón sobre la fotografía: acercar o alejar tomando como referencia
+  el punto que está bajo el cursor.
+- Clic izquierdo y arrastre: recorrer una imagen ampliada.
+- Botones − y +: alejar o acercar.
+- Ajustar: mostrar la fotografía completa en el área disponible.
+- 100 %: un píxel de imagen por píxel de pantalla.
+- Girar 90°: rota la vista, nunca el archivo.
+- Ctrl + rueda: zoom cuando el cursor está sobre la fotografía.
+- Ctrl + + y Ctrl + −: zoom mediante teclado.
+- Ctrl + 0: ajustar a la ventana.
+- Ctrl + 1: mostrar al 100 %.
+
+El zoom llega hasta 800 %. Al cambiar de fotografía se restablecen el ajuste a
+ventana y la rotación visual. La orientación EXIF se respeta automáticamente.
+Los atajos de zoom se desactivan mientras se escribe en un campo de texto.
+
+CARPETAS Y ARCHIVOS GENERADOS
+-----------------------------
+En la carpeta de salida se crea:
+
+  Entrega_Museo\
+    Catalogo_fotografico_pozos.xlsx
+    Fotos\
+      H-96-AM_P2705_N3_F001.jpg
+      H-96-AM_P2705_N3_F002.heic
+
+Cada fotografía registrada ocupa una fila. Varias fotos del mismo pozo y nivel
+reciben F001, F002, F003... El Excel contiene nombres de archivo, no enlaces ni
+rutas de esta computadora. Entrega la carpeta Entrega_Museo completa.
+
+Fuera de Entrega_Museo queda estado_catalogador.json. Debes conservarlo en la
+carpeta de trabajo para reanudar, recordar omitidas y evitar registros dobles;
+no hace falta entregarlo al Museo. También puede aparecer temporalmente
+.transaccion_catalogador.json si el equipo o el programa se interrumpe durante
+un guardado. No lo borres: permite recuperar la operación al reabrir.
+
+REANUDAR Y PROTEGER EL TRABAJO
+------------------------------
+- Para continuar, selecciona las mismas carpetas y el mismo código de sitio.
+- Cierra el Excel mientras registras. Microsoft Excel puede bloquear el archivo.
+- Si el Excel está bloqueado o falla la escritura, no se conserva la copia ni se
+  añade una fila; Pozo, Nivel, Vista y Observaciones permanecen para reintentar.
+- Si una interrupción ocurre después de escribir la copia y la fila, el diario
+  de transacción permite completar el estado al volver a abrir.
+- Las versiones antiguas de estado_catalogador.json siguen siendo compatibles.
+- Si existe una salida del formato anterior, se migra una sola vez sin modificar
+  el material anterior.
+
+Para corregir manualmente una asignación, cierra la aplicación y haz antes una
+copia de toda la carpeta de salida. El estado y el Excel deben seguir siendo
+coherentes para impedir duplicados.
+
+FORMATOS
+--------
+JPG/JPEG, PNG, TIFF y WEBP. HEIC/HEIF se habilita al instalar pillow-heif.
+Las copias conservan exactamente el formato y los datos contenidos en el archivo
+original. La fecha EXIF se registra solo si la imagen la incluye.
+
+SOLUCIÓN DE PROBLEMAS
+---------------------
+- "No se pudo guardar": cierra el Excel y vuelve a pulsar Guardar y siguiente.
+- No abre ABRIR.bat: vuelve a instalar Python 3 y activa su incorporación al PATH.
+- No se ve una imagen HEIC: ejecuta INSTALAR.bat de nuevo y reinicia el programa.
+- Falta assets\cucharilla.png: la aplicación abre igualmente, solo sin el icono.
