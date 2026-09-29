@@ -10,7 +10,15 @@ from pathlib import Path
 from openpyxl import load_workbook
 from PIL import Image
 
-from catalogador_pozos import Catalog, FIELDS, HEIC_ENABLED, SaveCommittedWarning, normalized
+from catalogador_pozos import (
+    Catalog,
+    CorrectionCommittedWarning,
+    App,
+    FIELDS,
+    HEIC_ENABLED,
+    SaveCommittedWarning,
+    normalized,
+)
 
 
 def digest(path: Path) -> str:
@@ -120,6 +128,124 @@ class CatalogIntegrationTests(unittest.TestCase):
         self.assertEqual(recovered.completed, {normalized(self.paths[0])})
         self.assert_originals_unchanged()
 
+    def test_correction_updates_row_copy_and_history_without_touching_original(self):
+        catalog = Catalog(self.source, self.output, "SITE")
+        first = catalog.save(self.paths[0], "1", "N1", "Planta", "Dato inicial")
+        catalog.save(self.paths[1], "2", "N2", "Perfil", "Otra foto")
+
+        same_group = catalog.correct(
+            self.paths[0], "1", "N1", "Detalle", "Observación corregida"
+        )
+        self.assertEqual(same_group["Nombre_archivo"], first["Nombre_archivo"])
+        self.assertEqual(same_group["Foto_en_pozo_y_nivel"], "1")
+        self.assertEqual(same_group["Vista_o_detalle"], "Detalle")
+        self.assertEqual(same_group["Observaciones"], "Observación corregida")
+
+        moved = catalog.correct(self.paths[0], "2", "N2", "Detalle", "Pozo corregido")
+        self.assertEqual(moved["Nombre_archivo"], "SITE_P2_N2_F002.jpg")
+        self.assertFalse((catalog.photos / first["Nombre_archivo"]).exists())
+        self.assertTrue((catalog.photos / moved["Nombre_archivo"]).is_file())
+        self.assertEqual(
+            digest(catalog.photos / moved["Nombre_archivo"]), self.original_hashes[self.paths[0]]
+        )
+        self.assertEqual(len(catalog.rows), 2)
+        self.assertEqual(len(catalog.corrections), 2)
+        self.assertEqual(catalog.corrections[-1]["before"]["Pozo"], "1")
+        self.assertEqual(catalog.corrections[-1]["after"]["Pozo"], "2")
+
+        reopened = Catalog(self.source, self.output, "SITE")
+        located = reopened.row_for_path(self.paths[0])
+        self.assertIsNotNone(located)
+        self.assertEqual(located[1]["Nombre_archivo"], "SITE_P2_N2_F002.jpg")
+        self.assertEqual(len(reopened.corrections), 2)
+        self.assert_originals_unchanged()
+
+    def test_correction_rolls_back_if_excel_cannot_be_written(self):
+        catalog = Catalog(self.source, self.output, "SITE")
+        original_row = catalog.save(self.paths[0], "1", "N1", "Planta", "Original")
+        real_writer = catalog._write_workbook
+
+        def blocked():
+            raise PermissionError("Excel bloqueado")
+
+        catalog._write_workbook = blocked
+        with self.assertRaises(PermissionError):
+            catalog.correct(self.paths[0], "3", "N4", "Perfil", "No debe quedar")
+        catalog._write_workbook = real_writer
+
+        self.assertTrue((catalog.photos / original_row["Nombre_archivo"]).is_file())
+        self.assertFalse((catalog.photos / "SITE_P3_N4_F001.jpg").exists())
+        self.assertEqual(catalog.rows[0], original_row)
+        self.assertEqual(catalog.record_map[normalized(self.paths[0])], original_row["Nombre_archivo"])
+        self.assertEqual(catalog.corrections, [])
+        self.assertFalse(catalog.journal_path.exists())
+
+        reopened = Catalog(self.source, self.output, "SITE")
+        self.assertEqual(reopened.rows[0], original_row)
+        self.assert_originals_unchanged()
+
+    def test_interrupted_correction_state_is_recovered_from_journal(self):
+        catalog = Catalog(self.source, self.output, "SITE")
+        catalog.save(self.paths[0], "1", "N1", "Planta", "Inicial")
+        real_state_writer = catalog._write_state
+
+        def state_blocked(*_args, **_kwargs):
+            raise PermissionError("Estado bloqueado")
+
+        catalog._write_state = state_blocked
+        with self.assertRaises(CorrectionCommittedWarning):
+            catalog.correct(self.paths[0], "4", "N8", "Perfil", "=Corregida")
+        self.assertTrue(catalog.journal_path.exists())
+        self.assertTrue((catalog.photos / "SITE_P4_N8_F001.jpg").is_file())
+        catalog._write_state = real_state_writer
+
+        recovered = Catalog(self.source, self.output, "SITE")
+        self.assertFalse(recovered.journal_path.exists())
+        located = recovered.row_for_path(self.paths[0])
+        self.assertIsNotNone(located)
+        self.assertEqual(located[1]["Nombre_archivo"], "SITE_P4_N8_F001.jpg")
+        self.assertEqual(located[1]["Observaciones"], "'=Corregida")
+        self.assertEqual(len(recovered.corrections), 1)
+        self.assert_originals_unchanged()
+
+    def test_old_state_rebuilds_unique_record_mapping_for_corrections(self):
+        catalog = Catalog(self.source, self.output, "SITE")
+        row = catalog.save(self.paths[0], "1", "N1", "", "")
+        old_state = {
+            "version": 2,
+            "processed_paths": sorted(catalog.completed),
+            "skipped_paths": [],
+            "last_path": "",
+        }
+        catalog.state_path.write_text(json.dumps(old_state), encoding="utf-8")
+
+        reopened = Catalog(self.source, self.output, "SITE")
+        located = reopened.row_for_path(self.paths[0])
+        self.assertIsNotNone(located)
+        self.assertEqual(located[1]["Nombre_archivo"], row["Nombre_archivo"])
+        corrected = reopened.correct(self.paths[0], "1", "N1", "Detalle", "Recuperada")
+        self.assertEqual(corrected["Nombre_archivo"], row["Nombre_archivo"])
+
+    @unittest.skipUnless(os.name == "nt", "prueba visual de widgets disponible en Windows")
+    def test_correction_mode_ui_smoke(self):
+        catalog = Catalog(self.source, self.output, "SITE")
+        catalog.save(self.paths[0], "8", "N2", "Perfil", "Revisar")
+        app = App()
+        app.withdraw()
+        try:
+            app.catalog = catalog
+            app._select_photo(self.paths[0], remember=False)
+            app._begin_correction()
+            app.update_idletasks()
+            self.assertEqual(app.editing_path, self.paths[0])
+            self.assertEqual(app.pit_var.get(), "8")
+            self.assertEqual(app.level_var.get(), "N2")
+            self.assertEqual(app.save_button.cget("text"), "Guardar corrección")
+            self.assertEqual(app.skip_button.cget("text"), "Cancelar corrección")
+            self.assertEqual(app.proposed_var.get(), "SITE_P8_N2_F001.jpg")
+        finally:
+            app._close()
+
     @unittest.skipUnless(HEIC_ENABLED, "pillow-heif no está instalado en este entorno")
     def test_heic_copy_and_catalog(self):
         heic_path = self.source / "foto_heic.heic"
@@ -172,6 +298,22 @@ class CatalogIntegrationTests(unittest.TestCase):
         self.assertFalse(catalog.journal_path.exists())
         row = catalog.save(self.paths[0], "9", "N5", "", "Reintento")
         self.assertEqual(row["Nombre_archivo"], "SITE_P9_N5_F001.jpg")
+
+        handle = create_file(
+            str(catalog.xlsx_path), 0x80000000, 0, None, 3, 0x80, None
+        )
+        self.assertNotIn(handle, (None, ctypes.c_void_p(-1).value))
+        try:
+            with self.assertRaises(OSError):
+                catalog.correct(self.paths[0], "10", "N6", "Perfil", "No debe aplicarse")
+        finally:
+            close_handle(handle)
+
+        self.assertTrue((catalog.photos / row["Nombre_archivo"]).is_file())
+        self.assertFalse((catalog.photos / "SITE_P10_N6_F001.jpg").exists())
+        self.assertEqual(catalog.rows[0], row)
+        corrected = catalog.correct(self.paths[0], "10", "N6", "Perfil", "Reintento")
+        self.assertEqual(corrected["Nombre_archivo"], "SITE_P10_N6_F001.jpg")
 
 
 if __name__ == "__main__":

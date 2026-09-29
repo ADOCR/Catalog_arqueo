@@ -2,7 +2,7 @@
 
 Aplicación de escritorio para catalogar fotografías arqueológicas por sitio,
 pozo y nivel, preparar copias con nombres normalizados y generar el Excel de
-entrega a entidad correspondiente.
+entrega al Museo Nacional.
 
 <p align="center">
   <img src="assets/cucharilla.png" alt="Cucharilla arqueológica" width="220">
@@ -17,13 +17,16 @@ entrega a entidad correspondiente.
 - Visor con zoom hasta 800 %, desplazamiento, ajuste, vista al 100 % y rotación.
 - Respeta la orientación EXIF.
 - Permite omitir fotografías, recuperarlas y reanudar el trabajo posteriormente.
+- Permite corregir un registro ya guardado desde su miniatura. Actualiza de forma
+  coordinada la fila de Excel y, si cambia pozo o nivel, el nombre de la copia.
+- Conserva en el archivo de estado un historial de las correcciones realizadas.
 - Lee JPG/JPEG, PNG, TIFF y WEBP. HEIC/HEIF se habilita con `pillow-heif`.
 - Interfaz en español para Windows, Linux y macOS.
 
 ## Windows: instalación sencilla
 
 1. Abre la sección **Releases** de este repositorio.
-2. Descarga `Catalogador_Pozos_Setup_2.0.0.exe`.
+2. Descarga `Catalogador_Pozos_Setup_2.1.0.exe`.
 3. Haz doble clic y sigue el asistente: **Siguiente → Instalar → Finalizar**.
 4. Abre **Catálogo fotográfico de pozos** desde el menú Inicio o el acceso
    directo del escritorio.
@@ -50,7 +53,10 @@ Quien prefiera ejecutar el código fuente puede instalar Python 3, ejecutar
    **Guardar y siguiente**.
 5. Usa **Omitir por ahora** si todavía no puedes identificar una foto. Su
    miniatura permite recuperarla después.
-6. Entrega la carpeta `Entrega_Museo` completa. Conserva
+6. Si detectas un error, selecciona la miniatura registrada, pulsa **Corregir
+   datos**, modifica los campos y guarda la corrección. Nunca edites el Excel y
+   el nombre de la copia por separado.
+7. Entrega la carpeta `Entrega_Museo` completa. Conserva
    `estado_catalogador.json` fuera de la entrega para poder reanudar.
 
 El manual detallado, incluidos todos los controles de zoom, está en
@@ -124,8 +130,9 @@ python catalogador_pozos.py
 ```
 
 Las pruebas comprueban consecutivos, integridad de originales y copias, Excel,
-omisión/recuperación, compatibilidad del estado, bloqueo real del Excel en
-Windows, recuperación de transacciones y HEIC cuando está disponible.
+omisión/recuperación, correcciones y su historial, compatibilidad del estado,
+bloqueo real del Excel en Windows, recuperación de transacciones y HEIC cuando
+está disponible.
 
 ## Construir el instalador de Windows
 
@@ -139,7 +146,7 @@ construcción, crea la aplicación autónoma con PyInstaller y compila el asiste
 con Inno Setup. El resultado queda en `instalador_generado`.
 
 También se incluye el flujo `.github/workflows/compilar-windows.yml`. Al crear
-una etiqueta como `v2.0.0`, GitHub Actions compila el instalador, lo guarda como
+una etiqueta como `v2.1.0`, GitHub Actions compila el instalador, lo guarda como
 artefacto y lo adjunta a la Release correspondiente.
 
 ## Publicación en GitHub
@@ -148,11 +155,10 @@ artefacto y lo adjunta a la Release correspondiente.
 2. Crea el repositorio y sube estos archivos.
 3. Elige y añade una licencia antes de hacerlo público. No se incluye una por
    defecto porque esa decisión corresponde a la persona propietaria del código.
-4. Crea una etiqueta `v2.0.0` para generar la primera Release automáticamente.
+4. Crea una etiqueta `v2.1.0` para generar la primera Release automáticamente.
 
 ## Privacidad y datos
 
 La aplicación trabaja localmente. No sube fotografías, catálogos ni datos a
 Internet. El único acceso de red se utiliza al instalar dependencias desde PyPI
 cuando se ejecuta desde el código fuente.
-

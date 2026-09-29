@@ -36,7 +36,7 @@ except ImportError:
 
 APP_DIR = Path(__file__).resolve().parent
 ASSET_PATH = APP_DIR / "assets" / "cucharilla.png"
-STATE_VERSION = 2
+STATE_VERSION = 3
 SUFFIXES = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"}
 if HEIC_ENABLED:
     SUFFIXES.update({".heic", ".heif"})
@@ -110,6 +110,10 @@ class SaveCommittedWarning(Exception):
     """La foto y el Excel se guardaron, pero el estado requiere recuperación."""
 
 
+class CorrectionCommittedWarning(Exception):
+    """La corrección se aplicó, pero el estado requiere recuperación."""
+
+
 class Catalog:
     """Persistencia del catálogo y transacciones de copia/Excel/estado."""
 
@@ -127,6 +131,8 @@ class Catalog:
         self.rows: list[dict[str, str]] = []
         self.completed: set[str] = set()
         self.skipped: set[str] = set()
+        self.record_map: dict[str, str] = {}
+        self.corrections: list[dict[str, object]] = []
         self.last_path = ""
 
         if not self.xlsx_path.exists() and not self.state_path.exists():
@@ -135,6 +141,7 @@ class Catalog:
         self._load_state()
         self._recover_interrupted_transaction()
         self.files = discover(self.source, self.output)
+        self._rebuild_record_map()
 
     def _open_workbook(self) -> None:
         if self.xlsx_path.exists():
@@ -175,6 +182,11 @@ class Catalog:
             self.completed = set(state.get("processed_paths", []))
             self.skipped = set(state.get("skipped_paths", [])) - self.completed
             self.last_path = str(state.get("last_path", ""))
+            self.record_map = {
+                str(path): str(filename)
+                for path, filename in dict(state.get("record_map", {})).items()
+            }
+            self.corrections = list(state.get("corrections", []))
             if len(self.completed) != len(self.rows) and not self.journal_path.exists():
                 raise ValueError(
                     "El estado y el Excel no coinciden. Haz una copia de la carpeta "
@@ -190,12 +202,18 @@ class Catalog:
         completed: set[str] | None = None,
         skipped: set[str] | None = None,
         last_path: str | None = None,
+        record_map: dict[str, str] | None = None,
+        corrections: list[dict[str, object]] | None = None,
     ) -> dict[str, object]:
         return {
             "version": STATE_VERSION,
             "processed_paths": sorted(self.completed if completed is None else completed),
             "skipped_paths": sorted(self.skipped if skipped is None else skipped),
             "last_path": self.last_path if last_path is None else last_path,
+            "record_map": dict(sorted(
+                (self.record_map if record_map is None else record_map).items()
+            )),
+            "corrections": self.corrections if corrections is None else corrections,
         }
 
     def _atomic_json(self, path: Path, data: dict[str, object]) -> None:
@@ -213,8 +231,13 @@ class Catalog:
         completed: set[str] | None = None,
         skipped: set[str] | None = None,
         last_path: str | None = None,
+        record_map: dict[str, str] | None = None,
+        corrections: list[dict[str, object]] | None = None,
     ) -> None:
-        self._atomic_json(self.state_path, self._state_data(completed, skipped, last_path))
+        self._atomic_json(
+            self.state_path,
+            self._state_data(completed, skipped, last_path, record_map, corrections),
+        )
 
     def remember_current(self, path: Path | None) -> None:
         value = normalized(path) if path else ""
@@ -231,25 +254,75 @@ class Catalog:
         try:
             journal = json.loads(self.journal_path.read_text(encoding="utf-8"))
             original = str(journal["original"])
-            filename = str(journal["filename"])
+            operation = str(journal.get("operation", "save"))
+            filename = str(journal.get("filename", journal.get("new_filename", "")))
         except Exception as exc:
             raise ValueError(
                 "Existe una transacción incompleta que no se puede interpretar: "
                 f"{self.journal_path.name}. {exc}"
             ) from exc
 
+        if operation == "correction":
+            self._recover_interrupted_correction(journal)
+            return
+
         destination = self.photos / filename
         excel_has_row = any(row.get("Nombre_archivo") == filename for row in self.rows)
         if excel_has_row and destination.is_file():
             completed = self.completed | {original}
             skipped = self.skipped - {original}
-            self._write_state(completed=completed, skipped=skipped, last_path=original)
+            record_map = dict(self.record_map)
+            record_map[original] = filename
+            self._write_state(
+                completed=completed, skipped=skipped, last_path=original,
+                record_map=record_map,
+            )
             self.completed, self.skipped, self.last_path = completed, skipped, original
+            self.record_map = record_map
             self.journal_path.unlink(missing_ok=True)
             return
 
         if destination.exists() and not excel_has_row:
             destination.unlink()
+        self.journal_path.unlink(missing_ok=True)
+
+    def _recover_interrupted_correction(self, journal: dict[str, object]) -> None:
+        original = str(journal["original"])
+        old_filename = str(journal["old_filename"])
+        new_filename = str(journal["new_filename"])
+        new_row = dict(journal["new_row"])
+        history = dict(journal["history"])
+        old_destination = self.photos / old_filename
+        new_destination = self.photos / new_filename
+        # Comparar toda la fila evita dar por aplicada una corrección de
+        # observaciones cuando el proceso se interrumpió antes de escribir Excel.
+        def matches_written_row(row: dict[str, str]) -> bool:
+            for key in FIELDS:
+                expected = str(new_row.get(key, ""))
+                if key != "Foto_en_pozo_y_nivel":
+                    expected = excel_safe(expected)
+                if str(row.get(key, "")) != expected:
+                    return False
+            return True
+
+        excel_has_new = any(matches_written_row(row) for row in self.rows)
+
+        if excel_has_new and new_destination.is_file():
+            record_map = dict(self.record_map)
+            record_map[original] = new_filename
+            corrections = list(self.corrections)
+            if history not in corrections:
+                corrections.append(history)
+            self._write_state(
+                last_path=original, record_map=record_map, corrections=corrections
+            )
+            self.record_map, self.corrections, self.last_path = record_map, corrections, original
+            self.journal_path.unlink(missing_ok=True)
+            return
+
+        # Si Excel no confirmó el cambio, restaura el nombre anterior de la copia.
+        if new_filename != old_filename and new_destination.exists() and not old_destination.exists():
+            os.replace(new_destination, old_destination)
         self.journal_path.unlink(missing_ok=True)
 
     def _migrate_previous(self) -> None:
@@ -293,11 +366,14 @@ class Catalog:
             ])
         workbook.save(self.xlsx_path)
         completed = {row["Ruta_original"] for row in old_rows}
+        record_map = {row["Ruta_original"]: row["Nombre_nuevo"] for row in old_rows}
         self._atomic_json(self.state_path, {
             "version": STATE_VERSION,
             "processed_paths": sorted(completed),
             "skipped_paths": [],
             "last_path": "",
+            "record_map": record_map,
+            "corrections": [],
         })
 
     def _append_row(self, row: dict[str, str]) -> None:
@@ -341,6 +417,41 @@ class Catalog:
             return "skipped"
         return "pending"
 
+    def _rebuild_record_map(self) -> None:
+        """Completa asociaciones inequívocas de estados creados por versiones anteriores."""
+        filenames = {row["Nombre_archivo"] for row in self.rows}
+        self.record_map = {
+            path: filename for path, filename in self.record_map.items()
+            if path in self.completed and filename in filenames
+        }
+        rows_by_original: dict[str, list[dict[str, str]]] = {}
+        paths_by_name: dict[str, list[str]] = {}
+        for row in self.rows:
+            rows_by_original.setdefault(row["Nombre_original"], []).append(row)
+        for path in self.completed:
+            paths_by_name.setdefault(Path(path).name, []).append(path)
+        for name, paths in paths_by_name.items():
+            candidates = rows_by_original.get(name, [])
+            if len(paths) == 1 and len(candidates) == 1:
+                self.record_map.setdefault(paths[0], candidates[0]["Nombre_archivo"])
+
+    def row_for_path(self, path: Path) -> tuple[int, dict[str, str]] | None:
+        original = normalized(path)
+        filename = self.record_map.get(original)
+        if filename:
+            for index, row in enumerate(self.rows):
+                if row["Nombre_archivo"] == filename:
+                    return index, row
+        matches = [
+            (index, row) for index, row in enumerate(self.rows)
+            if row["Nombre_original"] == path.name
+        ]
+        completed_same_name = [value for value in self.completed if Path(value).name == path.name]
+        if len(matches) == 1 and len(completed_same_name) == 1:
+            self.record_map[original] = matches[0][1]["Nombre_archivo"]
+            return matches[0]
+        return None
+
     def next_number(self, pit: str, level: str) -> int:
         numbers = [int(row["Foto_en_pozo_y_nivel"]) for row in self.rows
                    if row["Pozo"] == pit and row["Nivel"] == level
@@ -353,6 +464,32 @@ class Catalog:
         safe_site = self.validate_identifier(self.site, "Código del sitio")
         number = self.next_number(pit, level)
         return f"{safe_site}_P{pit}_{level}_F{number:03d}{path.suffix.lower()}"
+
+    def proposed_correction_name(self, path: Path, pit: str, level: str) -> str:
+        pit = self.validate_identifier(pit, "Pozo")
+        level = self.validate_identifier(level, "Nivel")
+        located = self.row_for_path(path)
+        if located is None:
+            raise ValueError(
+                "No se pudo asociar esta fotografía con una única fila del Excel. "
+                "Puede ocurrir con catálogos antiguos que contienen nombres originales repetidos."
+            )
+        _, old_row = located
+        if old_row["Pozo"] == pit and old_row["Nivel"] == level:
+            number = int(old_row["Foto_en_pozo_y_nivel"])
+        else:
+            number = self.next_number(pit, level)
+        safe_site = self.validate_identifier(self.site, "Código del sitio")
+        return f"{safe_site}_P{pit}_{level}_F{number:03d}{path.suffix.lower()}"
+
+    def _replace_worksheet_row(self, row_index: int, row: dict[str, str]) -> None:
+        excel_row = row_index + 2
+        for column, key in enumerate(FIELDS, 1):
+            value: object = int(row[key]) if key == "Foto_en_pozo_y_nivel" else excel_safe(row[key])
+            self.ws.cell(excel_row, column, value)
+        self.ws.cell(excel_row, FIELDS.index("Foto_en_pozo_y_nivel") + 1).alignment = Alignment(
+            horizontal="right"
+        )
 
     def set_skipped(self, path: Path, skipped: bool) -> None:
         original = normalized(path)
@@ -393,7 +530,7 @@ class Catalog:
             view.strip(), notes.strip(), datetime.now().isoformat(timespec="seconds"),
         ]))
         self._write_journal({
-            "version": 1, "original": original, "filename": filename,
+            "version": 1, "operation": "save", "original": original, "filename": filename,
             "started_at": datetime.now().isoformat(timespec="seconds"),
         })
         copied = False
@@ -409,11 +546,17 @@ class Catalog:
 
             completed = self.completed | {original}
             skipped = self.skipped - {original}
+            record_map = dict(self.record_map)
+            record_map[original] = filename
             try:
-                self._write_state(completed=completed, skipped=skipped, last_path=original)
+                self._write_state(
+                    completed=completed, skipped=skipped, last_path=original,
+                    record_map=record_map,
+                )
             except Exception as exc:
                 self.rows.append(row)
                 self.completed, self.skipped, self.last_path = completed, skipped, original
+                self.record_map = record_map
                 raise SaveCommittedWarning(
                     "La copia y la fila de Excel se guardaron. No se pudo actualizar el estado; "
                     "no repitas la foto. Al reabrir, el programa intentará recuperarlo."
@@ -421,6 +564,7 @@ class Catalog:
 
             self.rows.append(row)
             self.completed, self.skipped, self.last_path = completed, skipped, original
+            self.record_map = record_map
             self.journal_path.unlink(missing_ok=True)
             return row
         except SaveCommittedWarning:
@@ -431,6 +575,98 @@ class Catalog:
             if copied and not workbook_written:
                 destination.unlink(missing_ok=True)
             if not workbook_written:
+                self.journal_path.unlink(missing_ok=True)
+            raise
+
+    def correct(
+        self, path: Path, pit: str, level: str, view: str, notes: str
+    ) -> dict[str, str]:
+        """Corrige una fila y el nombre de su copia sin modificar el original."""
+        pit = self.validate_identifier(pit, "Pozo")
+        level = self.validate_identifier(level, "Nivel")
+        original = normalized(path)
+        if original not in self.completed:
+            raise ValueError("Solo se pueden corregir fotografías ya registradas.")
+        located = self.row_for_path(path)
+        if located is None:
+            raise ValueError(
+                "No se pudo identificar de forma inequívoca la fila de esta fotografía."
+            )
+        row_index, old_row = located
+        old_row = dict(old_row)
+        old_filename = old_row["Nombre_archivo"]
+        new_filename = self.proposed_correction_name(path, pit, level)
+        old_destination = self.photos / old_filename
+        new_destination = self.photos / new_filename
+        if not old_destination.is_file():
+            raise FileNotFoundError(f"Falta la copia registrada: {old_filename}")
+        if new_filename != old_filename and new_destination.exists():
+            raise FileExistsError(f"Ya existe {new_filename}; no se aplicó la corrección.")
+
+        if old_row["Pozo"] == pit and old_row["Nivel"] == level:
+            number = old_row["Foto_en_pozo_y_nivel"]
+        else:
+            number = str(self.next_number(pit, level))
+        new_row = dict(old_row)
+        new_row.update({
+            "Pozo": pit,
+            "Nivel": level,
+            "Foto_en_pozo_y_nivel": str(number),
+            "Nombre_archivo": new_filename,
+            "Vista_o_detalle": view.strip(),
+            "Observaciones": notes.strip(),
+        })
+        history: dict[str, object] = {
+            "original_path": original,
+            "corrected_at": datetime.now().isoformat(timespec="seconds"),
+            "before": old_row,
+            "after": new_row,
+        }
+        self._write_journal({
+            "version": 1,
+            "operation": "correction",
+            "original": original,
+            "old_filename": old_filename,
+            "new_filename": new_filename,
+            "old_row": old_row,
+            "new_row": new_row,
+            "history": history,
+        })
+
+        renamed = False
+        workbook_written = False
+        try:
+            if new_filename != old_filename:
+                os.replace(old_destination, new_destination)
+                renamed = True
+            self._replace_worksheet_row(row_index, new_row)
+            self._write_workbook()
+            workbook_written = True
+            record_map = dict(self.record_map)
+            record_map[original] = new_filename
+            corrections = list(self.corrections) + [history]
+            try:
+                self._write_state(
+                    last_path=original, record_map=record_map, corrections=corrections
+                )
+            except Exception as exc:
+                self.rows[row_index] = new_row
+                self.record_map, self.corrections, self.last_path = record_map, corrections, original
+                raise CorrectionCommittedWarning(
+                    "La corrección quedó aplicada en la copia y el Excel. El estado se "
+                    "completará automáticamente al reabrir."
+                ) from exc
+            self.rows[row_index] = new_row
+            self.record_map, self.corrections, self.last_path = record_map, corrections, original
+            self.journal_path.unlink(missing_ok=True)
+            return new_row
+        except CorrectionCommittedWarning:
+            raise
+        except Exception:
+            if not workbook_written:
+                self._replace_worksheet_row(row_index, old_row)
+                if renamed and new_destination.exists() and not old_destination.exists():
+                    os.replace(new_destination, old_destination)
                 self.journal_path.unlink(missing_ok=True)
             raise
 
@@ -820,6 +1056,7 @@ class App(tk.Tk):
         self.catalog: Catalog | None = None
         self.current: Path | None = None
         self.saving = False
+        self.editing_path: Path | None = None
         self.settings_open = True
         self.header_logo: ImageTk.PhotoImage | None = None
         self._sash_job: str | None = None
@@ -1194,6 +1431,14 @@ class App(tk.Tk):
     def _select_photo(self, path: Path | None, remember: bool = True) -> None:
         if path is not None and self.catalog is not None and path not in self.catalog.files:
             return
+        if self.editing_path is not None and path != self.editing_path:
+            if not messagebox.askyesno(
+                "Cancelar corrección",
+                "Hay una corrección sin guardar. ¿Quieres descartarla y cambiar de fotografía?",
+                parent=self,
+            ):
+                return
+            self._cancel_correction(clear_status=False)
         self.current = path
         self.viewer.load(path)
         self.thumbnails.select(path)
@@ -1217,7 +1462,14 @@ class App(tk.Tk):
             self._update_actions()
             return
         status = self.catalog.status_of(self.current)
-        if status == "registered":
+        if self.editing_path == self.current:
+            try:
+                self.proposed_var.set(self.catalog.proposed_correction_name(
+                    self.current, self.pit_var.get(), self.level_var.get()
+                ))
+            except ValueError:
+                self.proposed_var.set("Completa Pozo y Nivel con letras, números o guiones.")
+        elif status == "registered":
             self.proposed_var.set("Esta fotografía ya fue registrada.")
         elif status == "skipped":
             self.proposed_var.set("Recupérala a pendientes para poder registrarla.")
@@ -1232,7 +1484,11 @@ class App(tk.Tk):
     def _valid_form(self) -> bool:
         if self.catalog is None or self.current is None:
             return False
-        if self.catalog.status_of(self.current) != "pending":
+        status = self.catalog.status_of(self.current)
+        if self.editing_path == self.current:
+            if status != "registered":
+                return False
+        elif status != "pending":
             return False
         try:
             Catalog.validate_identifier(self.pit_var.get(), "Pozo")
@@ -1242,19 +1498,28 @@ class App(tk.Tk):
             return False
 
     def _update_actions(self) -> None:
+        self.save_button.configure(
+            text="Guardar corrección" if self.editing_path is not None else "Guardar y siguiente"
+        )
         self.save_button.configure(state="normal" if self._valid_form() and not self.saving else "disabled")
         if self.catalog is None or self.current is None:
             self.skip_button.configure(text="Omitir por ahora", state="disabled")
             return
         status = self.catalog.status_of(self.current)
-        if status == "skipped":
+        if self.editing_path == self.current:
+            self.skip_button.configure(
+                text="Cancelar corrección", state="normal" if not self.saving else "disabled"
+            )
+        elif status == "skipped":
             self.skip_button.configure(text="Recuperar a pendientes",
                                        state="normal" if not self.saving else "disabled")
         elif status == "pending":
             self.skip_button.configure(text="Omitir por ahora",
                                        state="normal" if not self.saving else "disabled")
         else:
-            self.skip_button.configure(text="Fotografía registrada", state="disabled")
+            self.skip_button.configure(
+                text="Corregir datos", state="normal" if not self.saving else "disabled"
+            )
 
     def _next_pending_after(self, path: Path | None) -> Path | None:
         assert self.catalog is not None
@@ -1272,6 +1537,9 @@ class App(tk.Tk):
 
     def _save(self) -> None:
         if self.catalog is None or self.current is None or not self._valid_form():
+            return
+        if self.editing_path == self.current:
+            self._save_correction()
             return
         saved_path = self.current
         self.saving = True
@@ -1315,11 +1583,98 @@ class App(tk.Tk):
             self._set_status(f"Guardado correctamente: {row['Nombre_archivo']}", "success")
         self.pit_entry.focus_set()
 
+    def _begin_correction(self) -> None:
+        if self.catalog is None or self.current is None:
+            return
+        located = self.catalog.row_for_path(self.current)
+        if located is None:
+            messagebox.showerror(
+                "No se puede corregir",
+                "No se pudo asociar esta fotografía con una única fila del Excel. "
+                "Esto puede ocurrir en un catálogo antiguo con nombres originales repetidos.",
+                parent=self,
+            )
+            return
+        _, row = located
+        self.editing_path = self.current
+        self.pit_var.set(row["Pozo"])
+        self.level_var.set(row["Nivel"])
+        self.view_var.set(row["Vista_o_detalle"])
+        self.notes.delete("1.0", "end")
+        self.notes.insert("1.0", row["Observaciones"])
+        self.current_label.configure(text=f"{self.current.name}\nCorrigiendo registro")
+        self._set_status(
+            "Modo corrección: revisa los datos y pulsa Guardar corrección.", "warning"
+        )
+        self._form_changed()
+        self.pit_entry.focus_set()
+
+    def _cancel_correction(self, clear_status: bool = True) -> None:
+        self.editing_path = None
+        self.pit_var.set("")
+        self.level_var.set("")
+        self.view_var.set("")
+        self.notes.delete("1.0", "end")
+        if self.current is not None and self.catalog is not None:
+            self.current_label.configure(text=f"{self.current.name}\nRegistrada")
+        if clear_status:
+            self._set_status("Corrección cancelada; el registro no cambió.", "info")
+        self._form_changed()
+
+    def _save_correction(self) -> None:
+        assert self.catalog is not None and self.current is not None
+        path = self.current
+        self.saving = True
+        self._update_actions()
+        self._set_status("Aplicando corrección en la copia, el Excel y el estado…", "info")
+        self.update_idletasks()
+        warning: str | None = None
+        try:
+            row = self.catalog.correct(
+                path, self.pit_var.get(), self.level_var.get(),
+                self.view_var.get(), self.notes.get("1.0", "end-1c"),
+            )
+        except CorrectionCommittedWarning as exc:
+            warning = str(exc)
+            located = self.catalog.row_for_path(path)
+            row = located[1] if located else {"Nombre_archivo": "registro corregido"}
+        except Exception as exc:
+            self.saving = False
+            self._update_actions()
+            self._set_status("No se aplicó la corrección; el formulario se conservó.", "error")
+            messagebox.showerror(
+                "No se pudo corregir",
+                f"{exc}\n\nSi el Excel está abierto, ciérralo y vuelve a intentar.",
+                parent=self,
+            )
+            return
+
+        self.saving = False
+        self.editing_path = None
+        # Una corrección no avanza a otra foto: no se arrastran sus valores al
+        # formulario normal aunque la opción de repetición esté activada.
+        self.pit_var.set("")
+        self.level_var.set("")
+        self.view_var.set("")
+        self.notes.delete("1.0", "end")
+        self.thumbnails.set_items(self.catalog.files, path, self.catalog.status_of)
+        self._select_photo(path)
+        self._update_progress()
+        if warning:
+            self._set_status(warning, "warning")
+            messagebox.showwarning("Corrección guardada con aviso", warning, parent=self)
+        else:
+            self._set_status(f"Corrección guardada: {row['Nombre_archivo']}", "success")
+
     def _toggle_skip(self) -> None:
         if self.catalog is None or self.current is None or self.saving:
             return
+        if self.editing_path == self.current:
+            self._cancel_correction()
+            return
         status = self.catalog.status_of(self.current)
         if status == "registered":
+            self._begin_correction()
             return
         path = self.current
         try:
