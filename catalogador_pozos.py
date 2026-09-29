@@ -62,6 +62,7 @@ GREEN_PALE = "#E8F0ED"
 GOLD = "#B8833B"
 RED = "#A94A45"
 CANVAS_BG = "#202624"
+ILLEGAL_EXCEL_CHARACTERS = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
 
 
 def enable_windows_dpi_awareness() -> None:
@@ -80,8 +81,10 @@ def enable_windows_dpi_awareness() -> None:
 
 
 def excel_safe(value: object) -> str:
-    """Conserva entradas libres como texto y evita fórmulas accidentales."""
-    text = str(value or "")
+    """Convierte a texto válido para XLSX y evita fórmulas accidentales."""
+    # Algunas cámaras escriben fechas EXIF rellenadas con NUL. Esos controles
+    # no son válidos en XML/XLSX, aunque el archivo de imagen sí pueda abrirse.
+    text = ILLEGAL_EXCEL_CHARACTERS.sub("", str(value or ""))
     if text.lstrip().startswith(("=", "+", "-", "@")):
         return "'" + text
     return text
@@ -1559,7 +1562,10 @@ class App(tk.Tk):
         except Exception as exc:
             self.saving = False
             self._update_actions()
-            self._set_status("No se guardó nada; los datos del formulario se conservaron.", "error")
+            self._set_status(
+                f"No se guardó nada: {exc}. Los datos del formulario se conservaron.",
+                "error",
+            )
             messagebox.showerror(
                 "No se pudo guardar",
                 f"{exc}\n\nSi el Excel está abierto, ciérralo y vuelve a intentar. "
@@ -1641,7 +1647,10 @@ class App(tk.Tk):
         except Exception as exc:
             self.saving = False
             self._update_actions()
-            self._set_status("No se aplicó la corrección; el formulario se conservó.", "error")
+            self._set_status(
+                f"No se aplicó la corrección: {exc}. El formulario se conservó.",
+                "error",
+            )
             messagebox.showerror(
                 "No se pudo corregir",
                 f"{exc}\n\nSi el Excel está abierto, ciérralo y vuelve a intentar.",

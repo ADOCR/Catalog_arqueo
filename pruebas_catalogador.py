@@ -99,6 +99,23 @@ class CatalogIntegrationTests(unittest.TestCase):
         workbook.close()
         self.assert_originals_unchanged()
 
+    def test_auxiliary_pit_with_invalid_exif_controls_is_saved(self):
+        photo = self.source / "auxiliar_exif_nulo.jpg"
+        exif = Image.Exif()
+        exif[36867] = "\x00" * 19
+        Image.new("RGB", (120, 80), "brown").save(photo, exif=exif, quality=90)
+        original_hash = digest(photo)
+
+        catalog = Catalog(self.source, self.output, "H-96-AM")
+        row = catalog.save(photo, "A1", "5", "", "")
+        self.assertEqual(row["Nombre_archivo"], "H-96-AM_PA1_5_F001.jpg")
+        self.assertEqual(digest(catalog.photos / row["Nombre_archivo"]), original_hash)
+
+        workbook = load_workbook(catalog.xlsx_path, read_only=True, data_only=True)
+        saved_exif = workbook.active.cell(workbook.active.max_row, FIELDS.index("Fecha_EXIF") + 1).value
+        workbook.close()
+        self.assertIn(saved_exif, (None, ""))
+
     def test_old_state_compatibility(self):
         catalog = Catalog(self.source, self.output, "SITE")
         catalog.save(self.paths[0], "1", "N1", "", "")

@@ -10,7 +10,7 @@ El zoom y la rotación existen solamente en pantalla.
 
 INSTALACIÓN EN WINDOWS
 ----------------------
-Si recibiste Catalogador_Pozos_Setup_2.1.0.exe, ábrelo y sigue el asistente.
+Si recibiste Catalogador_Pozos_Setup_2.1.1.exe, ábrelo y sigue el asistente.
 El instalador ya contiene Python y todas las bibliotecas: no necesitas ejecutar
 INSTALAR.bat ni realizar los pasos siguientes.
 
@@ -123,6 +123,9 @@ FORMATOS
 JPG/JPEG, PNG, TIFF y WEBP. HEIC/HEIF se habilita al instalar pillow-heif.
 Las copias conservan exactamente el formato y los datos contenidos en el archivo
 original. La fecha EXIF se registra solo si la imagen la incluye.
+Si una cámara rellena la fecha EXIF con caracteres incompatibles con Excel, el
+programa limpia solamente el texto destinado a esa celda. La foto y su copia no
+se editan.
 
 SOLUCIÓN DE PROBLEMAS
 ---------------------

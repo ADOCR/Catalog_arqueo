@@ -12,6 +12,8 @@ entrega al Museo Nacional.
 
 - Conserva intactos los archivos originales.
 - Copia cada fotografía sin cambiar su formato ni sus metadatos.
+- Tolera caracteres de control defectuosos en metadatos EXIF al escribir Excel,
+  sin modificar esos metadatos dentro de la fotografía original o su copia.
 - Genera consecutivos por pozo y nivel: `F001`, `F002`, `F003`…
 - Crea `Entrega_Museo`, con el Excel y la subcarpeta `Fotos`.
 - Visor con zoom hasta 800 %, desplazamiento, ajuste, vista al 100 % y rotación.
@@ -26,7 +28,7 @@ entrega al Museo Nacional.
 ## Windows: instalación sencilla
 
 1. Abre la sección **Releases** de este repositorio.
-2. Descarga `Catalogador_Pozos_Setup_2.1.0.exe`.
+2. Descarga `Catalogador_Pozos_Setup_2.1.1.exe`.
 3. Haz doble clic y sigue el asistente: **Siguiente → Instalar → Finalizar**.
 4. Abre **Catálogo fotográfico de pozos** desde el menú Inicio o el acceso
    directo del escritorio.
@@ -146,7 +148,7 @@ construcción, crea la aplicación autónoma con PyInstaller y compila el asiste
 con Inno Setup. El resultado queda en `instalador_generado`.
 
 También se incluye el flujo `.github/workflows/compilar-windows.yml`. Al crear
-una etiqueta como `v2.1.0`, GitHub Actions compila el instalador, lo guarda como
+una etiqueta como `v2.1.1`, GitHub Actions compila el instalador, lo guarda como
 artefacto y lo adjunta a la Release correspondiente.
 
 ## Publicación en GitHub
@@ -155,7 +157,7 @@ artefacto y lo adjunta a la Release correspondiente.
 2. Crea el repositorio y sube estos archivos.
 3. Elige y añade una licencia antes de hacerlo público. No se incluye una por
    defecto porque esa decisión corresponde a la persona propietaria del código.
-4. Crea una etiqueta `v2.1.0` para generar la primera Release automáticamente.
+4. Crea una etiqueta `v2.1.1` para generar la primera Release automáticamente.
 
 ## Privacidad y datos
 
