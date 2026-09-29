@@ -36,7 +36,7 @@ Excel de entrega al Museo Nacional.
 ## Windows: instalación sencilla
 
 1. Abre la sección **Releases** de este repositorio.
-2. Descarga `Catalogador_Pozos_Setup_2.3.0.exe`.
+2. Descarga `Catalogador_Pozos_Setup_2.3.1.exe`.
 3. Haz doble clic y sigue el asistente: **Siguiente → Instalar → Finalizar**.
 4. Abre **Catálogo fotográfico arqueológico** desde el menú Inicio o el acceso
    directo del escritorio.
@@ -63,6 +63,9 @@ Quien prefiera ejecutar el código fuente puede instalar Python 3, ejecutar
    Código de unidad y Nivel. Cuando corresponda, completa también el Tipo y
    Código de subunidad; ambos campos son opcionales, pero se usan juntos.
    Pulsa **Guardar y siguiente**.
+   Para una trinchera, escribe solo el número (por ejemplo, `1`). Si conservas
+   los datos para la siguiente foto, el campo seguirá mostrando `1`; la `T`
+   aparece automáticamente en el nombre de archivo y en el Excel.
 5. Usa **Omitir por ahora** si todavía no puedes identificar una foto. Su
    miniatura permite recuperarla después.
 6. Si detectas un error, selecciona la miniatura registrada, pulsa **Corregir
@@ -88,7 +91,7 @@ operación escrita en el formulario se asigna a las filas anteriores. Se crean
 respaldos del Excel y del estado fuera de `Entrega_Museo`; los nombres antiguos
 de las copias no se cambian automáticamente.
 
-Al abrir un catálogo 2.2.x en la versión 2.3.0, se agregan automáticamente las
+Al abrir un catálogo 2.2.x en la versión 2.3.x, se agregan automáticamente las
 columnas `Tipo_subunidad` y `Subunidad`, vacías para las filas existentes. Antes
 se crean `respaldo_catalogo_antes_v2_3.xlsx` y
 `respaldo_estado_antes_v2_3.json`; ninguna copia anterior se renombra.
@@ -181,7 +184,7 @@ construcción, crea la aplicación autónoma con PyInstaller y compila el asiste
 con Inno Setup. El resultado queda en `instalador_generado`.
 
 También se incluye el flujo `.github/workflows/compilar-windows.yml`. Al crear
-una etiqueta como `v2.3.0`, GitHub Actions compila el instalador, lo guarda como
+una etiqueta como `v2.3.1`, GitHub Actions compila el instalador, lo guarda como
 artefacto y lo adjunta a la Release correspondiente.
 
 ## Publicación en GitHub
@@ -190,7 +193,7 @@ artefacto y lo adjunta a la Release correspondiente.
 2. Crea el repositorio y sube estos archivos.
 3. Elige y añade una licencia antes de hacerlo público. No se incluye una por
    defecto porque esa decisión corresponde a la persona propietaria del código.
-4. Crea una etiqueta `v2.3.0` para generar la primera Release automáticamente.
+4. Crea una etiqueta `v2.3.1` para generar la Release automáticamente.
 
 ## Privacidad y datos
 

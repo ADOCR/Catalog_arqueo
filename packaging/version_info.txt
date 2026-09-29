@@ -16,12 +16,12 @@ VSVersionInfo(
         [
           StringStruct('CompanyName', 'Proyecto arqueológico'),
           StringStruct('FileDescription', 'Catálogo fotográfico arqueológico'),
-          StringStruct('FileVersion', '2.3.0'),
+          StringStruct('FileVersion', '2.3.1'),
           StringStruct('InternalName', 'CatalogadorPozos'),
           StringStruct('LegalCopyright', 'Copyright © 2026'),
           StringStruct('OriginalFilename', 'CatalogadorPozos.exe'),
           StringStruct('ProductName', 'Catálogo fotográfico arqueológico'),
-          StringStruct('ProductVersion', '2.3.0')
+          StringStruct('ProductVersion', '2.3.1')
         ]
       )
     ]),

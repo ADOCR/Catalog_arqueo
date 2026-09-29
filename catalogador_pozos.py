@@ -502,6 +502,18 @@ class Catalog:
             clean = clean[1:]
         return cls.validate_identifier(clean, "Código de pozo")
 
+    @staticmethod
+    def unit_form_value(unit_type: str, value: str) -> str:
+        """Muestra el número de trinchera sin el prefijo guardado en Excel."""
+        if unit_type == "Trinchera":
+            clean = value.strip()
+            upper = clean.upper()
+            if upper.startswith("TR") and len(clean) > 2:
+                return clean[2:]
+            if upper.startswith("T") and len(clean) > 1:
+                return clean[1:]
+        return value
+
     @classmethod
     def normalize_subunit(cls, subunit_type: str, value: str) -> tuple[str, str]:
         """Valida una subunidad opcional; ambos campos se usan juntos o quedan vacíos."""
@@ -1982,7 +1994,11 @@ class App(tk.Tk):
             return
 
         self.saving = False
-        if not self.keep_var.get():
+        if self.keep_var.get():
+            self.pit_var.set(Catalog.unit_form_value(
+                self.unit_type_var.get(), self.pit_var.get()
+            ))
+        else:
             self.operation_var.set("")
             self.unit_type_var.set("Pozo")
             self.pit_var.set("")
@@ -2018,7 +2034,9 @@ class App(tk.Tk):
         self.editing_path = self.current
         self.operation_var.set(row["Operacion"])
         self.unit_type_var.set(row["Tipo_unidad"])
-        self.pit_var.set(row["Unidad"])
+        self.pit_var.set(Catalog.unit_form_value(
+            row["Tipo_unidad"], row["Unidad"]
+        ))
         self.subunit_type_var.set(row.get("Tipo_subunidad", ""))
         self.subunit_var.set(row.get("Subunidad", ""))
         self.level_var.set(row["Nivel"])
@@ -2083,7 +2101,11 @@ class App(tk.Tk):
 
         self.saving = False
         self.editing_path = None
-        if not self.keep_var.get():
+        if self.keep_var.get():
+            self.pit_var.set(Catalog.unit_form_value(
+                self.unit_type_var.get(), self.pit_var.get()
+            ))
+        else:
             self.operation_var.set("")
             self.unit_type_var.set("Pozo")
             self.pit_var.set("")

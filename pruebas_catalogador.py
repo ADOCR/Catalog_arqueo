@@ -52,6 +52,13 @@ class CatalogIntegrationTests(unittest.TestCase):
         for path, expected in self.original_hashes.items():
             self.assertEqual(digest(path), expected)
 
+    def test_trench_form_value_has_no_visible_prefix(self):
+        self.assertEqual(Catalog.unit_form_value("Trinchera", "T1"), "1")
+        self.assertEqual(Catalog.unit_form_value("Trinchera", "TR1"), "1")
+        self.assertEqual(Catalog.unit_form_value("Trinchera", "1"), "1")
+        self.assertEqual(Catalog.normalize_unit("Trinchera", "1"), "T1")
+        self.assertEqual(Catalog.unit_form_value("Pozo", "12"), "12")
+
     def save_photo(
         self, catalog, path, unit, level, view="", notes="",
         operation="2", unit_type="Pozo", subunit_type="", subunit="",
@@ -430,13 +437,44 @@ class CatalogIntegrationTests(unittest.TestCase):
             self.assertEqual(app.editing_path, self.paths[0])
             self.assertEqual(app.operation_var.get(), "2")
             self.assertEqual(app.unit_type_var.get(), "Trinchera")
-            self.assertEqual(app.pit_var.get(), "T1")
+            self.assertEqual(app.pit_var.get(), "1")
             self.assertEqual(app.subunit_type_var.get(), "Cuadro")
             self.assertEqual(app.subunit_var.get(), "13")
             self.assertEqual(app.level_var.get(), "N2")
             self.assertEqual(app.save_button.cget("text"), "Guardar corrección")
             self.assertEqual(app.skip_button.cget("text"), "Cancelar corrección")
             self.assertEqual(app.proposed_var.get(), "SITE_OP2_T1_CD13_N2_F001.jpg")
+        finally:
+            app._close()
+
+    @unittest.skipUnless(os.name == "nt", "prueba visual de widgets disponible en Windows")
+    def test_trench_number_is_retained_without_prefix(self):
+        catalog = Catalog(self.source, self.output, "SITE")
+        app = App()
+        app.withdraw()
+        try:
+            app.catalog = catalog
+            app._select_photo(self.paths[0], remember=False)
+            app.operation_var.set("2")
+            app.unit_type_var.set("Trinchera")
+            app.pit_var.set("T1")
+            app.subunit_type_var.set("Cuadro")
+            app.subunit_var.set("13")
+            app.level_var.set("N2")
+            app.keep_var.set(True)
+
+            app._save()
+
+            self.assertEqual(app.current, self.paths[1])
+            self.assertEqual(app.pit_var.get(), "1")
+            self.assertEqual(app.proposed_var.get(), "SITE_OP2_T1_CD13_N2_F002.jpg")
+            self.assertEqual(catalog.rows[0]["Unidad"], "T1")
+            self.assertEqual(catalog.rows[0]["Nombre_archivo"], "SITE_OP2_T1_CD13_N2_F001.jpg")
+
+            app._save()
+            self.assertEqual(app.pit_var.get(), "1")
+            self.assertEqual(catalog.rows[1]["Unidad"], "T1")
+            self.assertEqual(catalog.rows[1]["Nombre_archivo"], "SITE_OP2_T1_CD13_N2_F002.jpg")
         finally:
             app._close()
 

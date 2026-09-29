@@ -11,7 +11,7 @@ editan. El zoom y la rotación existen solamente en pantalla.
 
 INSTALACIÓN EN WINDOWS
 ----------------------
-Si recibiste Catalogador_Pozos_Setup_2.3.0.exe, ábrelo y sigue el asistente.
+Si recibiste Catalogador_Pozos_Setup_2.3.1.exe, ábrelo y sigue el asistente.
 El instalador ya contiene Python y todas las bibliotecas: no necesitas ejecutar
 INSTALAR.bat ni realizar los pasos siguientes.
 
@@ -74,6 +74,9 @@ historial interno de estado_catalogador.json, fuera de Entrega_Museo.
 La opción "Mantener operación, unidad, subunidad y nivel" conserva esos campos
 después de guardar. Vista/detalle y Observaciones siempre se limpian. El
 consecutivo se vuelve a calcular y se muestra antes del siguiente guardado.
+En Trinchera, el campo de unidad muestra solo el código o número (por ejemplo,
+1), incluso al conservarlo para la siguiente foto o abrir una corrección. La T
+se agrega automáticamente al nombre de archivo y al dato guardado en Excel.
 
 SUBUNIDADES OPCIONALES
 ----------------------
