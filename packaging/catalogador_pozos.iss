@@ -1,5 +1,5 @@
-#define MyAppName "Catálogo fotográfico de pozos"
-#define MyAppVersion "2.1.1"
+#define MyAppName "Catálogo fotográfico arqueológico"
+#define MyAppVersion "2.3.0"
 #define MyAppPublisher "Proyecto arqueológico"
 #define MyAppExeName "CatalogadorPozos.exe"
 

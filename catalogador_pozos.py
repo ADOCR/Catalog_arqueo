@@ -36,12 +36,23 @@ except ImportError:
 
 APP_DIR = Path(__file__).resolve().parent
 ASSET_PATH = APP_DIR / "assets" / "cucharilla.png"
-STATE_VERSION = 3
+STATE_VERSION = 5
 SUFFIXES = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"}
 if HEIC_ENABLED:
     SUFFIXES.update({".heic", ".heif"})
 
 FIELDS = [
+    "Sitio", "Operacion", "Tipo_unidad", "Unidad", "Tipo_subunidad",
+    "Subunidad", "Nivel",
+    "Foto_en_unidad_y_nivel", "Nombre_archivo", "Nombre_original",
+    "Fecha_EXIF", "Vista_o_detalle", "Observaciones", "Fecha_catalogacion",
+]
+FIELDS_V4 = [
+    "Sitio", "Operacion", "Tipo_unidad", "Unidad", "Nivel",
+    "Foto_en_unidad_y_nivel", "Nombre_archivo", "Nombre_original",
+    "Fecha_EXIF", "Vista_o_detalle", "Observaciones", "Fecha_catalogacion",
+]
+LEGACY_FIELDS_V3 = [
     "Sitio", "Pozo", "Nivel", "Foto_en_pozo_y_nivel", "Nombre_archivo",
     "Nombre_original", "Fecha_EXIF", "Vista_o_detalle", "Observaciones",
     "Fecha_catalogacion",
@@ -63,6 +74,20 @@ GOLD = "#B8833B"
 RED = "#A94A45"
 CANVAS_BG = "#202624"
 ILLEGAL_EXCEL_CHARACTERS = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
+UNIT_TYPES = ("Pozo", "Pozo auxiliar", "Trinchera")
+SUBUNIT_TYPES = (
+    "", "Cuadro", "Cuadrante", "Suboperación", "Ampliación",
+    "Rasgo cultural", "Rasgo funerario", "Otro",
+)
+SUBUNIT_FILENAME_CODES = {
+    "Cuadro": "CD",
+    "Cuadrante": "CUAD",
+    "Suboperación": "SUBOP",
+    "Ampliación": "AMP",
+    "Rasgo cultural": "RC",
+    "Rasgo funerario": "RF",
+    "Otro": "SU",
+}
 
 
 def enable_windows_dpi_awareness() -> None:
@@ -120,10 +145,13 @@ class CorrectionCommittedWarning(Exception):
 class Catalog:
     """Persistencia del catálogo y transacciones de copia/Excel/estado."""
 
-    def __init__(self, source: Path, output: Path, site: str):
+    def __init__(
+        self, source: Path, output: Path, site: str, legacy_operation: str | None = None
+    ):
         self.source = source.resolve()
         self.output = output.resolve()
         self.site = site
+        self.legacy_operation = legacy_operation
         self.delivery = self.output / "Entrega_Museo"
         self.photos = self.delivery / "Fotos"
         self.xlsx_path = self.delivery / "Catalogo_fotografico_pozos.xlsx"
@@ -137,12 +165,18 @@ class Catalog:
         self.record_map: dict[str, str] = {}
         self.corrections: list[dict[str, object]] = []
         self.last_path = ""
+        self.needs_schema_migration = False
+        self.needs_subunit_migration = False
 
         if not self.xlsx_path.exists() and not self.state_path.exists():
             self._migrate_previous()
         self._open_workbook()
         self._load_state()
         self._recover_interrupted_transaction()
+        if self.needs_schema_migration:
+            self._migrate_operation_and_units(legacy_operation)
+        elif self.needs_subunit_migration:
+            self._migrate_optional_subunits()
         self.files = discover(self.source, self.output)
         self._rebuild_record_map()
 
@@ -150,10 +184,19 @@ class Catalog:
         if self.xlsx_path.exists():
             self.wb = load_workbook(self.xlsx_path)
             self.ws = self.wb.active
-            if [cell.value for cell in self.ws[1]] != FIELDS:
+            headers = [cell.value for cell in self.ws[1]]
+            if headers == FIELDS:
+                row_fields = FIELDS
+            elif headers == FIELDS_V4:
+                row_fields = FIELDS_V4
+                self.needs_subunit_migration = True
+            elif headers == LEGACY_FIELDS_V3:
+                row_fields = LEGACY_FIELDS_V3
+                self.needs_schema_migration = True
+            else:
                 raise ValueError("El Excel existente tiene columnas diferentes.")
             self.rows = [
-                dict(zip(FIELDS, [str(value or "") for value in values]))
+                dict(zip(row_fields, [str(value or "") for value in values]))
                 for values in self.ws.iter_rows(min_row=2, values_only=True)
                 if any(value is not None for value in values)
             ]
@@ -163,14 +206,14 @@ class Catalog:
         self.ws = self.wb.active
         self.ws.title = "Fotografías"
         self.ws.append(FIELDS)
-        self.ws.freeze_panes = "D2"
+        self.ws.freeze_panes = "H2"
         self.ws.sheet_view.showGridLines = False
         self.ws.row_dimensions[1].height = 31
         for cell in self.ws[1]:
             cell.fill = PatternFill("solid", fgColor="2F5D50")
             cell.font = Font(name="Aptos", size=10, bold=True, color="FFFFFF")
             cell.alignment = Alignment(vertical="center", horizontal="center")
-        widths = [14, 12, 12, 23, 43, 35, 23, 34, 52, 22]
+        widths = [14, 12, 17, 15, 18, 16, 12, 24, 48, 35, 23, 34, 52, 22]
         for index, width in enumerate(widths, 1):
             self.ws.column_dimensions[get_column_letter(index)].width = width
         self._write_workbook()
@@ -300,9 +343,9 @@ class Catalog:
         # Comparar toda la fila evita dar por aplicada una corrección de
         # observaciones cuando el proceso se interrumpió antes de escribir Excel.
         def matches_written_row(row: dict[str, str]) -> bool:
-            for key in FIELDS:
+            for key in new_row:
                 expected = str(new_row.get(key, ""))
-                if key != "Foto_en_pozo_y_nivel":
+                if key not in {"Foto_en_pozo_y_nivel", "Foto_en_unidad_y_nivel"}:
                     expected = excel_safe(expected)
                 if str(row.get(key, "")) != expected:
                     return False
@@ -350,6 +393,11 @@ class Catalog:
                 old_rows = list(reader)
         if not old_rows:
             return
+        if not self.legacy_operation:
+            raise ValueError(
+                "La salida anterior no incluye Operación. Escríbela antes de migrar."
+            )
+        operation = self.normalize_operation(self.legacy_operation)
 
         for row in old_rows:
             previous_copy = self.output / row["Ruta_relativa"]
@@ -363,10 +411,25 @@ class Catalog:
         sheet = workbook.active
         sheet.append(FIELDS)
         for row in old_rows:
-            sheet.append([
-                row.get("Nombre_nuevo", "") if key == "Nombre_archivo" else row.get(key, "")
-                for key in FIELDS
-            ])
+            unit_type = self.infer_legacy_unit_type(row.get("Pozo", ""))
+            unit = self.normalize_unit(unit_type, row.get("Pozo", ""))
+            converted = {
+                "Sitio": row.get("Sitio", ""),
+                "Operacion": operation,
+                "Tipo_unidad": unit_type,
+                "Unidad": unit,
+                "Tipo_subunidad": "",
+                "Subunidad": "",
+                "Nivel": row.get("Nivel", ""),
+                "Foto_en_unidad_y_nivel": row.get("Foto_en_pozo_y_nivel", ""),
+                "Nombre_archivo": row.get("Nombre_nuevo", ""),
+                "Nombre_original": row.get("Nombre_original", ""),
+                "Fecha_EXIF": row.get("Fecha_EXIF", ""),
+                "Vista_o_detalle": row.get("Vista_o_detalle", ""),
+                "Observaciones": row.get("Observaciones", ""),
+                "Fecha_catalogacion": row.get("Fecha_catalogacion", ""),
+            }
+            sheet.append([converted[key] for key in FIELDS])
         workbook.save(self.xlsx_path)
         completed = {row["Ruta_original"] for row in old_rows}
         record_map = {row["Ruta_original"]: row["Nombre_nuevo"] for row in old_rows}
@@ -381,14 +444,17 @@ class Catalog:
 
     def _append_row(self, row: dict[str, str]) -> None:
         self.ws.append([
-            int(row[key]) if key == "Foto_en_pozo_y_nivel" else excel_safe(row[key])
+            int(row[key]) if key == "Foto_en_unidad_y_nivel" else excel_safe(row[key])
             for key in FIELDS
         ])
         line = self.ws.max_row
-        self.ws.cell(line, FIELDS.index("Foto_en_pozo_y_nivel") + 1).alignment = Alignment(horizontal="right")
+        self.ws.cell(line, FIELDS.index("Foto_en_unidad_y_nivel") + 1).alignment = Alignment(
+            horizontal="right"
+        )
 
     def _write_workbook(self) -> None:
-        self.ws.auto_filter.ref = f"A1:J{self.ws.max_row}"
+        last_column = get_column_letter(len(FIELDS))
+        self.ws.auto_filter.ref = f"A1:{last_column}{self.ws.max_row}"
         fd, temp_name = tempfile.mkstemp(prefix="catalogo_", suffix=".xlsx", dir=self.delivery)
         os.close(fd)
         temp_path = Path(temp_name)
@@ -404,6 +470,179 @@ class Catalog:
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,30}", clean):
             raise ValueError(f"{label} solo admite letras, números, guion y guion bajo (máximo 30).")
         return clean
+
+    @classmethod
+    def normalize_operation(cls, value: str) -> str:
+        clean = value.strip()
+        if clean.upper().startswith("OP") and len(clean) > 2:
+            clean = clean[2:]
+        return cls.validate_identifier(clean, "Operación")
+
+    @classmethod
+    def normalize_unit(cls, unit_type: str, value: str) -> str:
+        if unit_type not in UNIT_TYPES:
+            raise ValueError("Selecciona Pozo, Pozo auxiliar o Trinchera.")
+        clean = cls.validate_identifier(value, "Código de unidad")
+        upper = clean.upper()
+        if unit_type == "Pozo auxiliar":
+            if upper.startswith("PA") and len(clean) > 2:
+                clean = clean[2:]
+            elif upper.startswith("A") and len(clean) > 1:
+                clean = clean[1:]
+            clean = cls.validate_identifier(clean, "Código de pozo auxiliar")
+            return f"A{clean}"
+        if unit_type == "Trinchera":
+            if upper.startswith("TR") and len(clean) > 2:
+                clean = clean[2:]
+            elif upper.startswith("T") and len(clean) > 1:
+                clean = clean[1:]
+            clean = cls.validate_identifier(clean, "Código de trinchera")
+            return f"T{clean}"
+        if upper.startswith("P") and len(clean) > 1:
+            clean = clean[1:]
+        return cls.validate_identifier(clean, "Código de pozo")
+
+    @classmethod
+    def normalize_subunit(cls, subunit_type: str, value: str) -> tuple[str, str]:
+        """Valida una subunidad opcional; ambos campos se usan juntos o quedan vacíos."""
+        clean_type = subunit_type.strip()
+        clean_value = value.strip()
+        if not clean_type and not clean_value:
+            return "", ""
+        if not clean_type or not clean_value:
+            raise ValueError(
+                "Para usar una subunidad completa tanto el tipo como su código o número."
+            )
+        if clean_type not in SUBUNIT_TYPES or not clean_type:
+            raise ValueError("Selecciona un tipo de subunidad de la lista.")
+        return clean_type, cls.validate_identifier(clean_value, "Código de subunidad")
+
+    @staticmethod
+    def infer_legacy_unit_type(value: str) -> str:
+        upper = value.strip().upper()
+        if upper.startswith("A") or upper.startswith("PA"):
+            return "Pozo auxiliar"
+        if upper.startswith("T"):
+            return "Trinchera"
+        return "Pozo"
+
+    @staticmethod
+    def unit_filename_token(unit_type: str, unit: str) -> str:
+        return unit if unit_type == "Trinchera" else f"P{unit}"
+
+    @staticmethod
+    def subunit_filename_token(subunit_type: str, subunit: str) -> str:
+        if not subunit_type:
+            return ""
+        return f"{SUBUNIT_FILENAME_CODES[subunit_type]}{subunit}"
+
+    def _migrate_operation_and_units(self, legacy_operation: str | None) -> None:
+        if not legacy_operation:
+            raise ValueError(
+                "Este catálogo fue creado antes de incluir Operación. Escribe la "
+                "operación de las filas existentes y vuelve a cargarlo."
+            )
+        operation = self.normalize_operation(legacy_operation)
+        migrated: list[dict[str, str]] = []
+        for old in self.rows:
+            unit_type = self.infer_legacy_unit_type(old["Pozo"])
+            unit = self.normalize_unit(unit_type, old["Pozo"])
+            migrated.append({
+                "Sitio": old["Sitio"],
+                "Operacion": operation,
+                "Tipo_unidad": unit_type,
+                "Unidad": unit,
+                "Tipo_subunidad": "",
+                "Subunidad": "",
+                "Nivel": old["Nivel"],
+                "Foto_en_unidad_y_nivel": old["Foto_en_pozo_y_nivel"],
+                "Nombre_archivo": old["Nombre_archivo"],
+                "Nombre_original": old["Nombre_original"],
+                "Fecha_EXIF": old["Fecha_EXIF"],
+                "Vista_o_detalle": old["Vista_o_detalle"],
+                "Observaciones": old["Observaciones"],
+                "Fecha_catalogacion": old["Fecha_catalogacion"],
+            })
+
+        backup_xlsx = self.output / "respaldo_catalogo_antes_v2_2.xlsx"
+        backup_state = self.output / "respaldo_estado_antes_v2_2.json"
+        if not backup_xlsx.exists():
+            shutil.copy2(self.xlsx_path, backup_xlsx)
+        if self.state_path.exists() and not backup_state.exists():
+            shutil.copy2(self.state_path, backup_state)
+
+        old_wb, old_ws, old_rows = self.wb, self.ws, self.rows
+        try:
+            self.wb = Workbook()
+            self.ws = self.wb.active
+            self.ws.title = "Fotografías"
+            self.ws.append(FIELDS)
+            self.ws.freeze_panes = "H2"
+            self.ws.sheet_view.showGridLines = False
+            self.ws.row_dimensions[1].height = 31
+            for cell in self.ws[1]:
+                cell.fill = PatternFill("solid", fgColor="2F5D50")
+                cell.font = Font(name="Aptos", size=10, bold=True, color="FFFFFF")
+                cell.alignment = Alignment(vertical="center", horizontal="center")
+            widths = [14, 12, 17, 15, 18, 16, 12, 24, 48, 35, 23, 34, 52, 22]
+            for index, width in enumerate(widths, 1):
+                self.ws.column_dimensions[get_column_letter(index)].width = width
+            self.rows = []
+            for row in migrated:
+                self._append_row(row)
+            self._write_workbook()
+            self.rows = migrated
+            self.needs_schema_migration = False
+        except Exception:
+            self.wb, self.ws, self.rows = old_wb, old_ws, old_rows
+            raise
+        try:
+            self._write_state()
+        except OSError:
+            pass
+
+    def _migrate_optional_subunits(self) -> None:
+        """Añade columnas opcionales sin cambiar filas ni nombres ya registrados."""
+        migrated = [
+            {key: str(old.get(key, "")) for key in FIELDS}
+            for old in self.rows
+        ]
+        backup_xlsx = self.output / "respaldo_catalogo_antes_v2_3.xlsx"
+        backup_state = self.output / "respaldo_estado_antes_v2_3.json"
+        if not backup_xlsx.exists():
+            shutil.copy2(self.xlsx_path, backup_xlsx)
+        if self.state_path.exists() and not backup_state.exists():
+            shutil.copy2(self.state_path, backup_state)
+
+        old_wb, old_ws, old_rows = self.wb, self.ws, self.rows
+        try:
+            self.wb = Workbook()
+            self.ws = self.wb.active
+            self.ws.title = "Fotografías"
+            self.ws.append(FIELDS)
+            self.ws.freeze_panes = "H2"
+            self.ws.sheet_view.showGridLines = False
+            self.ws.row_dimensions[1].height = 31
+            for cell in self.ws[1]:
+                cell.fill = PatternFill("solid", fgColor="2F5D50")
+                cell.font = Font(name="Aptos", size=10, bold=True, color="FFFFFF")
+                cell.alignment = Alignment(vertical="center", horizontal="center")
+            widths = [14, 12, 17, 15, 18, 16, 12, 24, 48, 35, 23, 34, 52, 22]
+            for index, width in enumerate(widths, 1):
+                self.ws.column_dimensions[get_column_letter(index)].width = width
+            self.rows = []
+            for row in migrated:
+                self._append_row(row)
+            self._write_workbook()
+            self.rows = migrated
+            self.needs_subunit_migration = False
+        except Exception:
+            self.wb, self.ws, self.rows = old_wb, old_ws, old_rows
+            raise
+        try:
+            self._write_state()
+        except OSError:
+            pass
 
     def remaining(self) -> list[Path]:
         return [path for path in self.files
@@ -455,21 +694,47 @@ class Catalog:
             return matches[0]
         return None
 
-    def next_number(self, pit: str, level: str) -> int:
-        numbers = [int(row["Foto_en_pozo_y_nivel"]) for row in self.rows
-                   if row["Pozo"] == pit and row["Nivel"] == level
-                   and str(row["Foto_en_pozo_y_nivel"]).isdigit()]
+    def next_number(
+        self, operation: str, unit_type: str, unit: str, level: str,
+        subunit_type: str = "", subunit: str = "",
+    ) -> int:
+        numbers = [int(row["Foto_en_unidad_y_nivel"]) for row in self.rows
+                   if row["Operacion"] == operation
+                   and row["Tipo_unidad"] == unit_type
+                   and row["Unidad"] == unit
+                   and row.get("Tipo_subunidad", "") == subunit_type
+                   and row.get("Subunidad", "") == subunit
+                   and row["Nivel"] == level
+                   and str(row["Foto_en_unidad_y_nivel"]).isdigit()]
         return max(numbers, default=0) + 1
 
-    def proposed_name(self, path: Path, pit: str, level: str) -> str:
-        pit = self.validate_identifier(pit, "Pozo")
+    def proposed_name(
+        self, path: Path, operation: str, unit_type: str, unit: str, level: str,
+        subunit_type: str = "", subunit: str = "",
+    ) -> str:
+        operation = self.normalize_operation(operation)
+        unit = self.normalize_unit(unit_type, unit)
+        subunit_type, subunit = self.normalize_subunit(subunit_type, subunit)
         level = self.validate_identifier(level, "Nivel")
         safe_site = self.validate_identifier(self.site, "Código del sitio")
-        number = self.next_number(pit, level)
-        return f"{safe_site}_P{pit}_{level}_F{number:03d}{path.suffix.lower()}"
+        number = self.next_number(
+            operation, unit_type, unit, level, subunit_type, subunit
+        )
+        unit_token = self.unit_filename_token(unit_type, unit)
+        subunit_token = self.subunit_filename_token(subunit_type, subunit)
+        context = f"{unit_token}_{subunit_token}" if subunit_token else unit_token
+        return (
+            f"{safe_site}_OP{operation}_{context}_{level}_"
+            f"F{number:03d}{path.suffix.lower()}"
+        )
 
-    def proposed_correction_name(self, path: Path, pit: str, level: str) -> str:
-        pit = self.validate_identifier(pit, "Pozo")
+    def proposed_correction_name(
+        self, path: Path, operation: str, unit_type: str, unit: str, level: str,
+        subunit_type: str = "", subunit: str = "",
+    ) -> str:
+        operation = self.normalize_operation(operation)
+        unit = self.normalize_unit(unit_type, unit)
+        subunit_type, subunit = self.normalize_subunit(subunit_type, subunit)
         level = self.validate_identifier(level, "Nivel")
         located = self.row_for_path(path)
         if located is None:
@@ -478,19 +743,34 @@ class Catalog:
                 "Puede ocurrir con catálogos antiguos que contienen nombres originales repetidos."
             )
         _, old_row = located
-        if old_row["Pozo"] == pit and old_row["Nivel"] == level:
-            number = int(old_row["Foto_en_pozo_y_nivel"])
-        else:
-            number = self.next_number(pit, level)
+        same_group = (
+            old_row["Operacion"] == operation
+            and old_row["Tipo_unidad"] == unit_type
+            and old_row["Unidad"] == unit
+            and old_row.get("Tipo_subunidad", "") == subunit_type
+            and old_row.get("Subunidad", "") == subunit
+            and old_row["Nivel"] == level
+        )
+        if same_group:
+            return old_row["Nombre_archivo"]
+        number = self.next_number(
+            operation, unit_type, unit, level, subunit_type, subunit
+        )
         safe_site = self.validate_identifier(self.site, "Código del sitio")
-        return f"{safe_site}_P{pit}_{level}_F{number:03d}{path.suffix.lower()}"
+        unit_token = self.unit_filename_token(unit_type, unit)
+        subunit_token = self.subunit_filename_token(subunit_type, subunit)
+        context = f"{unit_token}_{subunit_token}" if subunit_token else unit_token
+        return (
+            f"{safe_site}_OP{operation}_{context}_{level}_"
+            f"F{number:03d}{path.suffix.lower()}"
+        )
 
     def _replace_worksheet_row(self, row_index: int, row: dict[str, str]) -> None:
         excel_row = row_index + 2
         for column, key in enumerate(FIELDS, 1):
-            value: object = int(row[key]) if key == "Foto_en_pozo_y_nivel" else excel_safe(row[key])
+            value: object = int(row[key]) if key == "Foto_en_unidad_y_nivel" else excel_safe(row[key])
             self.ws.cell(excel_row, column, value)
-        self.ws.cell(excel_row, FIELDS.index("Foto_en_pozo_y_nivel") + 1).alignment = Alignment(
+        self.ws.cell(excel_row, FIELDS.index("Foto_en_unidad_y_nivel") + 1).alignment = Alignment(
             horizontal="right"
         )
 
@@ -507,15 +787,25 @@ class Catalog:
         self.skipped = new_skipped
         self.last_path = original
 
-    def save(self, path: Path, pit: str, level: str, view: str, notes: str) -> dict[str, str]:
-        pit = self.validate_identifier(pit, "Pozo")
+    def save(
+        self, path: Path, operation: str, unit_type: str, unit: str,
+        level: str, view: str, notes: str,
+        subunit_type: str = "", subunit: str = "",
+    ) -> dict[str, str]:
+        operation = self.normalize_operation(operation)
+        unit = self.normalize_unit(unit_type, unit)
+        subunit_type, subunit = self.normalize_subunit(subunit_type, subunit)
         level = self.validate_identifier(level, "Nivel")
         original = normalized(path)
         if original in self.completed:
             raise ValueError("Esta fotografía ya está registrada.")
 
-        number = self.next_number(pit, level)
-        filename = self.proposed_name(path, pit, level)
+        number = self.next_number(
+            operation, unit_type, unit, level, subunit_type, subunit
+        )
+        filename = self.proposed_name(
+            path, operation, unit_type, unit, level, subunit_type, subunit
+        )
         destination = self.photos / filename
         if destination.exists():
             raise FileExistsError(f"Ya existe {filename}. Revisa la carpeta antes de continuar.")
@@ -529,8 +819,10 @@ class Catalog:
             pass
 
         row = dict(zip(FIELDS, [
-            self.site, pit, level, str(number), filename, path.name, exif_date,
-            view.strip(), notes.strip(), datetime.now().isoformat(timespec="seconds"),
+            self.site, operation, unit_type, unit, subunit_type, subunit, level,
+            str(number), filename,
+            path.name, exif_date, view.strip(), notes.strip(),
+            datetime.now().isoformat(timespec="seconds"),
         ]))
         self._write_journal({
             "version": 1, "operation": "save", "original": original, "filename": filename,
@@ -582,10 +874,14 @@ class Catalog:
             raise
 
     def correct(
-        self, path: Path, pit: str, level: str, view: str, notes: str
+        self, path: Path, operation: str, unit_type: str, unit: str,
+        level: str, view: str, notes: str,
+        subunit_type: str = "", subunit: str = "",
     ) -> dict[str, str]:
         """Corrige una fila y el nombre de su copia sin modificar el original."""
-        pit = self.validate_identifier(pit, "Pozo")
+        operation = self.normalize_operation(operation)
+        unit = self.normalize_unit(unit_type, unit)
+        subunit_type, subunit = self.normalize_subunit(subunit_type, subunit)
         level = self.validate_identifier(level, "Nivel")
         original = normalized(path)
         if original not in self.completed:
@@ -598,7 +894,9 @@ class Catalog:
         row_index, old_row = located
         old_row = dict(old_row)
         old_filename = old_row["Nombre_archivo"]
-        new_filename = self.proposed_correction_name(path, pit, level)
+        new_filename = self.proposed_correction_name(
+            path, operation, unit_type, unit, level, subunit_type, subunit
+        )
         old_destination = self.photos / old_filename
         new_destination = self.photos / new_filename
         if not old_destination.is_file():
@@ -606,15 +904,28 @@ class Catalog:
         if new_filename != old_filename and new_destination.exists():
             raise FileExistsError(f"Ya existe {new_filename}; no se aplicó la corrección.")
 
-        if old_row["Pozo"] == pit and old_row["Nivel"] == level:
-            number = old_row["Foto_en_pozo_y_nivel"]
+        if (
+            old_row["Operacion"] == operation
+            and old_row["Tipo_unidad"] == unit_type
+            and old_row["Unidad"] == unit
+            and old_row.get("Tipo_subunidad", "") == subunit_type
+            and old_row.get("Subunidad", "") == subunit
+            and old_row["Nivel"] == level
+        ):
+            number = old_row["Foto_en_unidad_y_nivel"]
         else:
-            number = str(self.next_number(pit, level))
+            number = str(self.next_number(
+                operation, unit_type, unit, level, subunit_type, subunit
+            ))
         new_row = dict(old_row)
         new_row.update({
-            "Pozo": pit,
+            "Operacion": operation,
+            "Tipo_unidad": unit_type,
+            "Unidad": unit,
+            "Tipo_subunidad": subunit_type,
+            "Subunidad": subunit,
             "Nivel": level,
-            "Foto_en_pozo_y_nivel": str(number),
+            "Foto_en_unidad_y_nivel": str(number),
             "Nombre_archivo": new_filename,
             "Vista_o_detalle": view.strip(),
             "Observaciones": notes.strip(),
@@ -1051,7 +1362,7 @@ class ThumbnailStrip(ttk.Frame):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Catálogo fotográfico de pozos")
+        self.title("Catálogo fotográfico arqueológico")
         self.geometry("1280x820")
         self.minsize(780, 560)
         self.configure(background=SAND)
@@ -1067,13 +1378,21 @@ class App(tk.Tk):
         self.source_var = tk.StringVar()
         self.output_var = tk.StringVar()
         self.site_var = tk.StringVar(value="H-96-AM")
+        self.operation_var = tk.StringVar(value="2")
+        self.unit_type_var = tk.StringVar(value="Pozo")
         self.pit_var = tk.StringVar()
+        self.subunit_type_var = tk.StringVar()
+        self.subunit_var = tk.StringVar()
         self.level_var = tk.StringVar()
         self.view_var = tk.StringVar()
         self.keep_var = tk.BooleanVar(value=True)
         self.zoom_var = tk.StringVar(value="—")
-        self.proposed_var = tk.StringVar(value="Completa Pozo y Nivel para ver el nombre previsto.")
-        self.progress_var = tk.StringVar(value="Registradas: 0 · Pendientes: 0 · Omitidas por revisar: 0")
+        self.proposed_var = tk.StringVar(
+            value="Completa Operación, Unidad y Nivel para ver el nombre previsto."
+        )
+        self.progress_var = tk.StringVar(
+            value="Registradas: 0 · Pendientes: 0 · Omitidas: 0 · Falta revisar: 0,0 %"
+        )
         self.status_var = tk.StringVar(value="Selecciona las carpetas de origen y salida.")
 
         self._configure_styles()
@@ -1084,7 +1403,11 @@ class App(tk.Tk):
         self._build_thumbnails()
         self._build_statusbar()
         self._bind_shortcuts()
+        self.operation_var.trace_add("write", lambda *_args: self._form_changed())
+        self.unit_type_var.trace_add("write", lambda *_args: self._form_changed())
         self.pit_var.trace_add("write", lambda *_args: self._form_changed())
+        self.subunit_type_var.trace_add("write", lambda *_args: self._form_changed())
+        self.subunit_var.trace_add("write", lambda *_args: self._form_changed())
         self.level_var.trace_add("write", lambda *_args: self._form_changed())
         self.site_var.trace_add("write", lambda *_args: self._form_changed())
         self._update_actions()
@@ -1129,7 +1452,7 @@ class App(tk.Tk):
                     row=0, column=0, rowspan=2, padx=(0, 12))
             except Exception:
                 pass
-        ttk.Label(header, text="Catálogo fotográfico de pozos", style="Title.TLabel").grid(
+        ttk.Label(header, text="Catálogo fotográfico arqueológico", style="Title.TLabel").grid(
             row=0, column=1, sticky="sw")
         ttk.Label(header,
                   text="Registro y preparación de fotografías para entrega al Museo Nacional",
@@ -1152,7 +1475,7 @@ class App(tk.Tk):
                 row=row_index, column=1, sticky="ew", pady=4)
             ttk.Button(self.settings_frame, text="Elegir…", command=command,
                        style="Secondary.TButton").grid(row=row_index, column=2, padx=(8, 0), pady=4)
-        ttk.Label(self.settings_frame, text="Código del sitio", style="Panel.TLabel").grid(
+        ttk.Label(self.settings_frame, text="Código del sitio / proyecto", style="Panel.TLabel").grid(
             row=2, column=0, sticky="w", pady=4)
         ttk.Entry(self.settings_frame, textvariable=self.site_var, width=20,
                   style="Mandatory.TEntry").grid(row=2, column=1, sticky="w", pady=4)
@@ -1213,41 +1536,79 @@ class App(tk.Tk):
         self.current_label = ttk.Label(self.form, text="Sin fotografía seleccionada",
                                        style="Muted.Panel.TLabel", wraplength=320)
         self.current_label.grid(row=1, column=0, sticky="ew", pady=(3, 14))
-        ttk.Label(self.form, text="Pozo  ·  obligatorio", style="Required.Panel.TLabel").grid(
+        ttk.Label(self.form, text="Operación  ·  obligatoria", style="Required.Panel.TLabel").grid(
             row=2, column=0, sticky="w")
+        self.operation_entry = ttk.Entry(
+            self.form, textvariable=self.operation_var,
+            style="Mandatory.TEntry", font=("Segoe UI", 12),
+        )
+        self.operation_entry.grid(row=3, column=0, sticky="ew", pady=(3, 11))
+        ttk.Label(self.form, text="Tipo de unidad  ·  obligatorio",
+                  style="Required.Panel.TLabel").grid(row=4, column=0, sticky="w")
+        self.unit_type_combo = ttk.Combobox(
+            self.form, textvariable=self.unit_type_var, values=UNIT_TYPES,
+            state="readonly", font=("Segoe UI", 11),
+        )
+        self.unit_type_combo.grid(row=5, column=0, sticky="ew", pady=(3, 11))
+        ttk.Label(self.form, text="Código / número de unidad  ·  obligatorio",
+                  style="Required.Panel.TLabel").grid(row=6, column=0, sticky="w")
         self.pit_entry = ttk.Entry(self.form, textvariable=self.pit_var,
                                    style="Mandatory.TEntry", font=("Segoe UI", 12))
-        self.pit_entry.grid(row=3, column=0, sticky="ew", pady=(3, 11))
+        self.pit_entry.grid(row=7, column=0, sticky="ew", pady=(3, 11))
+        ttk.Label(
+            self.form, text="Subunidad  ·  opcional (completa ambos campos)",
+            style="Panel.TLabel",
+        ).grid(row=8, column=0, sticky="w")
+        subunit_frame = ttk.Frame(self.form, style="Panel.TFrame")
+        subunit_frame.grid(row=9, column=0, sticky="ew", pady=(3, 11))
+        subunit_frame.columnconfigure(0, weight=3)
+        subunit_frame.columnconfigure(1, weight=2)
+        ttk.Label(subunit_frame, text="Tipo", style="Muted.Panel.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Label(subunit_frame, text="Código / número", style="Muted.Panel.TLabel").grid(
+            row=0, column=1, sticky="w", padx=(8, 0)
+        )
+        self.subunit_type_combo = ttk.Combobox(
+            subunit_frame, textvariable=self.subunit_type_var,
+            values=SUBUNIT_TYPES, state="readonly", font=("Segoe UI", 10),
+        )
+        self.subunit_type_combo.grid(row=1, column=0, sticky="ew")
+        self.subunit_entry = ttk.Entry(
+            subunit_frame, textvariable=self.subunit_var, style="Optional.TEntry",
+            font=("Segoe UI", 11),
+        )
+        self.subunit_entry.grid(row=1, column=1, sticky="ew", padx=(8, 0))
         ttk.Label(self.form, text="Nivel  ·  obligatorio", style="Required.Panel.TLabel").grid(
-            row=4, column=0, sticky="w")
+            row=10, column=0, sticky="w")
         self.level_entry = ttk.Entry(self.form, textvariable=self.level_var,
                                      style="Mandatory.TEntry", font=("Segoe UI", 12))
-        self.level_entry.grid(row=5, column=0, sticky="ew", pady=(3, 13))
+        self.level_entry.grid(row=11, column=0, sticky="ew", pady=(3, 13))
         ttk.Label(self.form, text="Nombre previsto", style="Panel.TLabel").grid(
-            row=6, column=0, sticky="w")
+            row=12, column=0, sticky="w")
         self.proposed_label = ttk.Label(
             self.form, textvariable=self.proposed_var, style="Muted.Panel.TLabel",
             wraplength=320, justify="left")
-        self.proposed_label.grid(row=7, column=0, sticky="ew", pady=(3, 14))
-        ttk.Separator(self.form).grid(row=8, column=0, sticky="ew", pady=(0, 13))
+        self.proposed_label.grid(row=13, column=0, sticky="ew", pady=(3, 14))
+        ttk.Separator(self.form).grid(row=14, column=0, sticky="ew", pady=(0, 13))
         ttk.Label(self.form, text="Vista / detalle  ·  opcional", style="Panel.TLabel").grid(
-            row=9, column=0, sticky="w")
+            row=15, column=0, sticky="w")
         ttk.Entry(self.form, textvariable=self.view_var, style="Optional.TEntry").grid(
-            row=10, column=0, sticky="ew", pady=(3, 11))
+            row=16, column=0, sticky="ew", pady=(3, 11))
         ttk.Label(self.form, text="Observaciones  ·  opcional", style="Panel.TLabel").grid(
-            row=11, column=0, sticky="w")
+            row=17, column=0, sticky="w")
         self.notes = tk.Text(
             self.form, height=5, wrap="word", relief="solid", borderwidth=1,
             highlightthickness=1, highlightbackground="#CDD5D1", highlightcolor=GREEN,
             font=("Segoe UI", 10), foreground=INK, background=WHITE)
-        self.notes.grid(row=12, column=0, sticky="ew", pady=(3, 11))
+        self.notes.grid(row=18, column=0, sticky="ew", pady=(3, 11))
 
     def _build_form_actions(self, parent: tk.Misc) -> None:
         actions = ttk.Frame(parent, style="Panel.TFrame", padding=(16, 8, 16, 12))
         actions.pack(fill="x", side="bottom")
         actions.columnconfigure(0, weight=1)
         ttk.Separator(actions).grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        ttk.Checkbutton(actions, text="Mantener pozo y nivel para la siguiente foto",
+        ttk.Checkbutton(actions, text="Mantener operación, unidad, subunidad y nivel",
                         variable=self.keep_var).grid(row=1, column=0, sticky="w", pady=(0, 8))
         self.save_button = ttk.Button(actions, text="Guardar y siguiente",
                                       command=self._save, style="Accent.TButton")
@@ -1402,7 +1763,34 @@ class App(tk.Tk):
             if source.resolve() == output.resolve():
                 raise ValueError("El origen y la salida deben ser carpetas distintas.")
             site = Catalog.validate_identifier(self.site_var.get(), "Código del sitio")
-            catalog = Catalog(source, output, site)
+            operation = Catalog.normalize_operation(self.operation_var.get())
+            self.operation_var.set(operation)
+            existing_xlsx = (
+                output / "Entrega_Museo" / "Catalogo_fotografico_pozos.xlsx"
+            )
+            if existing_xlsx.exists():
+                check = load_workbook(existing_xlsx, read_only=True, data_only=True)
+                try:
+                    sheet = check.active
+                    headers = [cell.value for cell in sheet[1]]
+                    existing_site = str(sheet.cell(2, 1).value or "")
+                finally:
+                    check.close()
+                if existing_site and existing_site != site:
+                    raise ValueError(
+                        f"El catálogo existente usa el código {existing_site}, no {site}."
+                    )
+                if headers == LEGACY_FIELDS_V3 and not messagebox.askyesno(
+                    "Actualizar catálogo anterior",
+                    f"Las filas existentes no tienen Operación. Se les asignará "
+                    f"Operación {operation} y se crearán respaldos fuera de "
+                    "Entrega_Museo. Los nombres de las copias existentes no cambiarán.\n\n"
+                    "¿Continuar?",
+                    parent=self,
+                ):
+                    self._set_status("Actualización del catálogo cancelada.", "info")
+                    return
+            catalog = Catalog(source, output, site, legacy_operation=operation)
             if catalog.rows and catalog.rows[0]["Sitio"] != site:
                 raise ValueError("El catálogo existente usa otro código de sitio.")
             self.catalog = catalog
@@ -1461,17 +1849,23 @@ class App(tk.Tk):
 
     def _form_changed(self) -> None:
         if self.catalog is None or self.current is None:
-            self.proposed_var.set("Completa Pozo y Nivel para ver el nombre previsto.")
+            self.proposed_var.set(
+                "Completa Operación, Unidad y Nivel para ver el nombre previsto."
+            )
             self._update_actions()
             return
         status = self.catalog.status_of(self.current)
         if self.editing_path == self.current:
             try:
                 self.proposed_var.set(self.catalog.proposed_correction_name(
-                    self.current, self.pit_var.get(), self.level_var.get()
+                    self.current, self.operation_var.get(), self.unit_type_var.get(),
+                    self.pit_var.get(), self.level_var.get(),
+                    self.subunit_type_var.get(), self.subunit_var.get(),
                 ))
             except ValueError:
-                self.proposed_var.set("Completa Pozo y Nivel con letras, números o guiones.")
+                self.proposed_var.set(
+                    "Completa los campos obligatorios y, si usas subunidad, ambos campos."
+                )
         elif status == "registered":
             self.proposed_var.set("Esta fotografía ya fue registrada.")
         elif status == "skipped":
@@ -1479,9 +1873,15 @@ class App(tk.Tk):
         else:
             try:
                 self.proposed_var.set(
-                    self.catalog.proposed_name(self.current, self.pit_var.get(), self.level_var.get()))
+                    self.catalog.proposed_name(
+                        self.current, self.operation_var.get(), self.unit_type_var.get(),
+                        self.pit_var.get(), self.level_var.get(),
+                        self.subunit_type_var.get(), self.subunit_var.get(),
+                    ))
             except ValueError:
-                self.proposed_var.set("Completa Pozo y Nivel con letras, números o guiones.")
+                self.proposed_var.set(
+                    "Completa los campos obligatorios y, si usas subunidad, ambos campos."
+                )
         self._update_actions()
 
     def _valid_form(self) -> bool:
@@ -1494,7 +1894,11 @@ class App(tk.Tk):
         elif status != "pending":
             return False
         try:
-            Catalog.validate_identifier(self.pit_var.get(), "Pozo")
+            Catalog.normalize_operation(self.operation_var.get())
+            Catalog.normalize_unit(self.unit_type_var.get(), self.pit_var.get())
+            Catalog.normalize_subunit(
+                self.subunit_type_var.get(), self.subunit_var.get()
+            )
             Catalog.validate_identifier(self.level_var.get(), "Nivel")
             return True
         except ValueError:
@@ -1551,11 +1955,15 @@ class App(tk.Tk):
         self.update_idletasks()
         committed_warning: str | None = None
         predicted_name = self.catalog.proposed_name(
-            saved_path, self.pit_var.get(), self.level_var.get())
+            saved_path, self.operation_var.get(), self.unit_type_var.get(),
+            self.pit_var.get(), self.level_var.get(),
+            self.subunit_type_var.get(), self.subunit_var.get())
         try:
             row = self.catalog.save(
-                saved_path, self.pit_var.get(), self.level_var.get(),
-                self.view_var.get(), self.notes.get("1.0", "end-1c"))
+                saved_path, self.operation_var.get(), self.unit_type_var.get(),
+                self.pit_var.get(), self.level_var.get(),
+                self.view_var.get(), self.notes.get("1.0", "end-1c"),
+                self.subunit_type_var.get(), self.subunit_var.get())
         except SaveCommittedWarning as exc:
             committed_warning = str(exc)
             row = {"Nombre_archivo": predicted_name}
@@ -1569,12 +1977,17 @@ class App(tk.Tk):
             messagebox.showerror(
                 "No se pudo guardar",
                 f"{exc}\n\nSi el Excel está abierto, ciérralo y vuelve a intentar. "
-                "Pozo, nivel y observaciones permanecen en pantalla.", parent=self)
+                "Operación, unidad, subunidad, nivel y observaciones permanecen en pantalla.",
+                parent=self)
             return
 
         self.saving = False
         if not self.keep_var.get():
+            self.operation_var.set("")
+            self.unit_type_var.set("Pozo")
             self.pit_var.set("")
+            self.subunit_type_var.set("")
+            self.subunit_var.set("")
             self.level_var.set("")
         self.view_var.set("")
         self.notes.delete("1.0", "end")
@@ -1603,7 +2016,11 @@ class App(tk.Tk):
             return
         _, row = located
         self.editing_path = self.current
-        self.pit_var.set(row["Pozo"])
+        self.operation_var.set(row["Operacion"])
+        self.unit_type_var.set(row["Tipo_unidad"])
+        self.pit_var.set(row["Unidad"])
+        self.subunit_type_var.set(row.get("Tipo_subunidad", ""))
+        self.subunit_var.set(row.get("Subunidad", ""))
         self.level_var.set(row["Nivel"])
         self.view_var.set(row["Vista_o_detalle"])
         self.notes.delete("1.0", "end")
@@ -1617,7 +2034,11 @@ class App(tk.Tk):
 
     def _cancel_correction(self, clear_status: bool = True) -> None:
         self.editing_path = None
+        self.operation_var.set("")
+        self.unit_type_var.set("Pozo")
         self.pit_var.set("")
+        self.subunit_type_var.set("")
+        self.subunit_var.set("")
         self.level_var.set("")
         self.view_var.set("")
         self.notes.delete("1.0", "end")
@@ -1637,8 +2058,10 @@ class App(tk.Tk):
         warning: str | None = None
         try:
             row = self.catalog.correct(
-                path, self.pit_var.get(), self.level_var.get(),
+                path, self.operation_var.get(), self.unit_type_var.get(),
+                self.pit_var.get(), self.level_var.get(),
                 self.view_var.get(), self.notes.get("1.0", "end-1c"),
+                self.subunit_type_var.get(), self.subunit_var.get(),
             )
         except CorrectionCommittedWarning as exc:
             warning = str(exc)
@@ -1660,10 +2083,13 @@ class App(tk.Tk):
 
         self.saving = False
         self.editing_path = None
-        # Una corrección no avanza a otra foto: no se arrastran sus valores al
-        # formulario normal aunque la opción de repetición esté activada.
-        self.pit_var.set("")
-        self.level_var.set("")
+        if not self.keep_var.get():
+            self.operation_var.set("")
+            self.unit_type_var.set("Pozo")
+            self.pit_var.set("")
+            self.subunit_type_var.set("")
+            self.subunit_var.set("")
+            self.level_var.set("")
         self.view_var.set("")
         self.notes.delete("1.0", "end")
         self.thumbnails.set_items(self.catalog.files, path, self.catalog.status_of)
@@ -1711,9 +2137,14 @@ class App(tk.Tk):
         skipped = sum(1 for path in self.catalog.files
                       if self.catalog.status_of(path) == "skipped")
         pending = total - registered - skipped
+        remaining = pending + skipped
+        remaining_percent = (remaining * 100 / total) if total else 0.0
+        percent_text = f"{remaining_percent:.1f}".replace(".", ",")
         self.progress.configure(maximum=max(1, total), value=registered)
         self.progress_var.set(
-            f"Registradas: {registered} · Pendientes: {pending} · Omitidas por revisar: {skipped}")
+            f"Registradas: {registered} · Pendientes: {pending} · "
+            f"Omitidas: {skipped} · Falta revisar: {percent_text} %"
+        )
         self.thumbnails._redraw()
 
     def _set_status(self, text: str, kind: str = "info") -> None:

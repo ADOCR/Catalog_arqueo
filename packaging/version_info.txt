@@ -1,7 +1,7 @@
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(2, 1, 1, 0),
-    prodvers=(2, 1, 1, 0),
+    filevers=(2, 3, 0, 0),
+    prodvers=(2, 3, 0, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -15,13 +15,13 @@ VSVersionInfo(
         '040A04E4',
         [
           StringStruct('CompanyName', 'Proyecto arqueológico'),
-          StringStruct('FileDescription', 'Catálogo fotográfico de pozos'),
-          StringStruct('FileVersion', '2.1.1'),
+          StringStruct('FileDescription', 'Catálogo fotográfico arqueológico'),
+          StringStruct('FileVersion', '2.3.0'),
           StringStruct('InternalName', 'CatalogadorPozos'),
           StringStruct('LegalCopyright', 'Copyright © 2026'),
           StringStruct('OriginalFilename', 'CatalogadorPozos.exe'),
-          StringStruct('ProductName', 'Catálogo fotográfico de pozos'),
-          StringStruct('ProductVersion', '2.1.1')
+          StringStruct('ProductName', 'Catálogo fotográfico arqueológico'),
+          StringStruct('ProductVersion', '2.3.0')
         ]
       )
     ]),

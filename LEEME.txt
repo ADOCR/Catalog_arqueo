@@ -1,16 +1,17 @@
-CATALOGADOR FOTOGRÁFICO DE POZOS (Windows)
-===========================================
+CATALOGADOR FOTOGRÁFICO ARQUEOLÓGICO (Windows)
+================================================
 
 QUÉ HACE
 --------
-Permite revisar fotografías descargadas, escribir manualmente el pozo y el
-nivel, guardar una copia con nombre normalizado y añadir una fila al Excel de
-entrega. Los archivos originales no se renombran, no se mueven y no se editan.
-El zoom y la rotación existen solamente en pantalla.
+Permite revisar fotografías descargadas, escribir manualmente la operación, el
+tipo y código de unidad y el nivel, guardar una copia con nombre normalizado y
+añadir una fila al Excel de entrega. Admite pozos, pozos auxiliares y
+trincheras. Los archivos originales no se renombran, no se mueven y no se
+editan. El zoom y la rotación existen solamente en pantalla.
 
 INSTALACIÓN EN WINDOWS
 ----------------------
-Si recibiste Catalogador_Pozos_Setup_2.1.1.exe, ábrelo y sigue el asistente.
+Si recibiste Catalogador_Pozos_Setup_2.3.0.exe, ábrelo y sigue el asistente.
 El instalador ya contiene Python y todas las bibliotecas: no necesitas ejecutar
 INSTALAR.bat ni realizar los pasos siguientes.
 
@@ -32,38 +33,61 @@ FLUJO DE TRABAJO
 1. Descarga y descomprime las fotografías. Los archivos JSON de Google Takeout
    se ignoran; el programa no procesa videos.
 2. Elige la carpeta con las fotografías y una carpeta distinta para la salida.
-3. Revisa el código del sitio. "H-96-AM" es solo el valor inicial.
+3. Revisa el código del sitio/proyecto. "H-96-AM" es solo el valor inicial.
+   Para otro proyecto utiliza otra carpeta de salida y su propio código.
 4. Pulsa "Cargar / reanudar". La configuración se plegará para dejar más espacio.
-5. Selecciona una foto en la franja inferior, escribe Pozo y Nivel y revisa el
-   nombre previsto. Vista/detalle y Observaciones son opcionales.
+5. Selecciona una foto en la franja inferior. Escribe Operación, elige Pozo,
+   Pozo auxiliar o Trinchera, escribe su código y el Nivel. Si la pizarra indica
+   una subdivisión, selecciona el Tipo de subunidad y escribe su Código/número.
+   La subunidad es opcional: deja ambos campos vacíos cuando no corresponda.
+   Vista/detalle y Observaciones también son opcionales.
 6. Pulsa "Guardar y siguiente". La aplicación crea la copia, actualiza el Excel
    y solo entonces marca la fotografía como registrada.
 7. Si aún no puedes identificarla, pulsa "Omitir por ahora". No cuenta como
    registrada ni como trabajo terminado. Selecciona su miniatura y pulsa
    "Recuperar a pendientes" para volver a trabajar con ella.
 
+La parte superior muestra las registradas, pendientes, omitidas y el porcentaje
+que falta revisar. Ese porcentaje incluye las pendientes y las omitidas, porque
+una foto omitida todavía no está terminada. La barra avanza solo con las fotos
+registradas.
+
 CORREGIR UNA FOTO YA REGISTRADA
 -------------------------------
 1. Selecciona la miniatura de la fotografía registrada.
-2. Pulsa "Corregir datos". El formulario mostrará Pozo, Nivel, Vista/detalle y
-   Observaciones tal como se guardaron.
+2. Pulsa "Corregir datos". El formulario mostrará Operación, Tipo de unidad,
+   Código, Subunidad, Nivel, Vista/detalle y Observaciones tal como se guardaron.
 3. Modifica lo necesario y revisa el nombre previsto.
 4. Pulsa "Guardar corrección".
 
 Si solo cambian Vista/detalle u Observaciones, se conserva el nombre de la
-copia. Si cambian Pozo o Nivel, la copia recibe el siguiente consecutivo libre
-del nuevo grupo y se actualiza la misma fila del Excel; no se crea una fila
-duplicada ni se renumeran las demás fotografías. El archivo original permanece
-intacto. "Cancelar corrección" descarta los cambios no guardados.
+copia. Si cambian Operación, Tipo de unidad, Código, Subunidad o Nivel, la copia
+recibe el siguiente consecutivo libre del nuevo grupo y se actualiza la misma
+fila del Excel; no se crea una fila duplicada ni se renumeran las demás
+fotografías. El archivo original permanece intacto. "Cancelar corrección"
+descarta los cambios.
 
 No corrijas por separado el Excel y el nombre del archivo: usa siempre este
 modo para que ambos permanezcan sincronizados. Cada cambio queda anotado en el
 historial interno de estado_catalogador.json, fuera de Entrega_Museo.
 
-La opción "Mantener pozo y nivel para la siguiente foto" conserva únicamente
-esos dos campos después de guardar. Vista/detalle y Observaciones siempre se
-limpian. El consecutivo se vuelve a calcular y se muestra antes del siguiente
-guardado.
+La opción "Mantener operación, unidad, subunidad y nivel" conserva esos campos
+después de guardar. Vista/detalle y Observaciones siempre se limpian. El
+consecutivo se vuelve a calcular y se muestra antes del siguiente guardado.
+
+SUBUNIDADES OPCIONALES
+----------------------
+Están disponibles Cuadro, Cuadrante, Suboperación, Ampliación, Rasgo cultural,
+Rasgo funerario y Otro. Para usar una subunidad debes completar su tipo y su
+código; si dejas ambos vacíos, el registro funciona igual que en versiones
+anteriores. Ejemplo de una pizarra con Operación 3, Trinchera 1, Cuadro 13 y
+Nivel 1:
+
+  H-96-AM_OP3_T1_CD13_1_F001.jpg
+
+Las fotografías del mismo contexto reciben F001, F002, F003... El contexto
+incluye operación, unidad, subunidad y nivel. Por eso el Cuadro 14 comienza su
+propio consecutivo y una trinchera sin subunidad mantiene otro consecutivo.
 
 ZOOM, DESPLAZAMIENTO Y ROTACIÓN
 -------------------------------
@@ -90,12 +114,15 @@ En la carpeta de salida se crea:
   Entrega_Museo\
     Catalogo_fotografico_pozos.xlsx
     Fotos\
-      H-96-AM_P2705_N3_F001.jpg
-      H-96-AM_P2705_N3_F002.heic
+      H-96-AM_OP2_P2705_N3_F001.jpg
+      H-96-AM_OP2_PA1_5_F001.jpg
+      H-96-AM_OP2_T1_5_F001.heic
+      H-96-AM_OP3_T1_CD13_1_F001.jpg
 
-Cada fotografía registrada ocupa una fila. Varias fotos del mismo pozo y nivel
-reciben F001, F002, F003... El Excel contiene nombres de archivo, no enlaces ni
-rutas de esta computadora. Entrega la carpeta Entrega_Museo completa.
+Cada fotografía registrada ocupa una fila. Varias fotos de la misma operación,
+unidad, subunidad y nivel reciben F001, F002, F003... Si no hay subunidad, ese
+campo queda vacío. El Excel contiene nombres de archivo, no enlaces ni rutas de
+esta computadora. Entrega Entrega_Museo completa.
 
 Fuera de Entrega_Museo queda estado_catalogador.json. Debes conservarlo en la
 carpeta de trabajo para reanudar, recordar omitidas y evitar registros dobles;
@@ -109,7 +136,8 @@ REANUDAR Y PROTEGER EL TRABAJO
 - Para continuar, selecciona las mismas carpetas y el mismo código de sitio.
 - Cierra el Excel mientras registras. Microsoft Excel puede bloquear el archivo.
 - Si el Excel está bloqueado o falla la escritura, no se conserva la copia ni se
-  añade una fila; Pozo, Nivel, Vista y Observaciones permanecen para reintentar.
+  añade una fila; Operación, Unidad, Subunidad, Nivel, Vista y Observaciones
+  permanecen para reintentar.
 - Si el bloqueo ocurre durante una corrección, el programa restaura el nombre y
   los datos anteriores; el formulario permanece disponible para reintentar.
 - Si una interrupción ocurre después de escribir la copia y la fila, el diario
@@ -117,6 +145,14 @@ REANUDAR Y PROTEGER EL TRABAJO
 - Las versiones antiguas de estado_catalogador.json siguen siendo compatibles.
 - Si existe una salida del formato anterior, se migra una sola vez sin modificar
   el material anterior.
+- Al abrir un catálogo 2.2.x se agregan las columnas Tipo_subunidad y Subunidad,
+  vacías para los registros anteriores. Se crean los respaldos
+  respaldo_catalogo_antes_v2_3.xlsx y respaldo_estado_antes_v2_3.json fuera de
+  Entrega_Museo y no se renombran las copias existentes.
+- Al migrar un catálogo anterior a 2.2.0, la operación visible en el formulario
+  se asigna a todas sus filas. En la carpeta de trabajo se crean
+  respaldo_catalogo_antes_v2_2.xlsx y respaldo_estado_antes_v2_2.json. Las
+  copias ya registradas conservan sus nombres; las nuevas incluyen OP.
 
 FORMATOS
 --------
