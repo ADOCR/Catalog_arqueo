@@ -2,7 +2,7 @@
 
 Aplicación de escritorio para catalogar fotografías arqueológicas por sitio,
 pozo y nivel, preparar copias con nombres normalizados y generar el Excel de
-entrega al Museo Nacional.
+entrega a entidad correspondiente.
 
 <p align="center">
   <img src="assets/cucharilla.png" alt="Cucharilla arqueológica" width="220">
